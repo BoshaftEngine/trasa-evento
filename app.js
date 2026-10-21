@@ -9,6 +9,10 @@ const conn = document.querySelector('#connectionBadge');
 const title = document.querySelector('#pageTitle');
 const adminTabs = ['general','equipos','revisiones','retos'];
 const teamKey = 'trasa_ojo_verde_equipo';
+const DEFAULT_EVENT_NAME = 'Operación Ojo Verde';
+const DEFAULT_EVENT_DESCRIPTION = 'Explora San Andreas, identifica residuos y lugares de recuperación y demuestra tu trabajo con fotografías. Cuantas más pruebas válidas, más puntos.';
+function eventName(){ return A.control?.eventName || DEFAULT_EVENT_NAME; }
+function eventDescription(){ return A.control?.eventDescription || DEFAULT_EVENT_DESCRIPTION; }
 const A = { app:null,auth:null,db:null,user:null,view:'home',adminTab:'general',adminMode:false,
   control:null,teamId:sessionTeamId(),team:null,submissions:[],challenges:[],scores:[],allTeams:[],adminSelected:'',allSubs:[],
   membersCount:2,subSelected:'',busy:false,unsubs:[],challengeEditor:null };
@@ -63,7 +67,15 @@ async function openTeam(id,quiet=false){
     A.teamId=id;A.team={id,...snapshot.data()};localStorage.setItem(teamKey,id);
     history.replaceState(null,'',urlForTeam(id));
     unsubscribeTeam();unsubscribeSubmissions();
-    unsubscribeTeam=onSnapshot(doc(A.db,'teams',id),s=>{A.team=s.exists()?{id,...s.data()}:null;if(A.view==='team')refresh();},problem);
+    unsubscribeTeam=onSnapshot(doc(A.db,'teams',id),s=>{
+      if(!s.exists()){
+        A.team=null;A.teamId='';A.submissions=[];A.subSelected='';
+        localStorage.removeItem(teamKey);history.replaceState(null,'',location.pathname+location.search);
+        unsubscribeSubmissions();unsubscribeTeam();notify('El equipo ha sido eliminado por la organización.');
+        refresh();return;
+      }
+      A.team={id,...s.data()};if(A.view==='team')refresh();
+    },problem);
     unsubscribeSubmissions=onSnapshot(collection(A.db,'teams',id,'submissions'),s=>{A.submissions=s.docs.map(d=>({id:d.id,...d.data()}));if(A.view==='tasks'||A.view==='team')refresh();},problem);
     if(!quiet)notify('Equipo cargado correctamente.');
     return true;
@@ -73,10 +85,10 @@ function navigate(view){A.view=view;if(view==='tasks'&&visibleChallenges())loadC
 function refresh(){if(!A.db)return;
   badge.textContent=stateTxt();badge.className='pill '+(isLive()?'ok':A.control?.status==='registration'?'warn':'');
   const pages={home:'Resumen del evento',team:'Mi equipo',tasks:'Pruebas fotográficas',ranking:'Clasificación',admin:'Administración'};
-  title.textContent=pages[A.view];document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===A.view));
+  title.textContent=A.view==='home'?eventName():pages[A.view];document.title=`TRASA · ${eventName()}`;document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===A.view));
   root.innerHTML=({home,team,tasks,ranking,admin}[A.view]||home)(); bindForms();
 }
-function home(){return `<section class="hero"><div><div class="eyebrow">TRASA PRESENTA</div><h2>Operación<br>Ojo Verde.</h2><p>Explora San Andreas, identifica residuos y lugares de recuperación y demuestra tu trabajo con fotografías. Cuantas más pruebas válidas, más puntos.</p><div class="actions"><button class="button white" data-action="team">Acceder a mi equipo →</button><button class="button white" data-action="tasks">Consultar pruebas ↗</button></div></div><img class="hero-logo" src="assets/logotipo.webp" alt="TRASA · Tratamiento de Residuos Antón"></section>
+function home(){return `<section class="hero"><div><div class="eyebrow">TRASA PRESENTA</div><h2>${esc(eventName())}</h2><p class="event-description">${esc(eventDescription())}</p><div class="actions"><button class="button white" data-action="team">Acceder a mi equipo →</button><button class="button white" data-action="tasks">Consultar pruebas ↗</button></div></div><img class="hero-logo" src="assets/logotipo.webp" alt="TRASA · Tratamiento de Residuos Antón"></section>
   <div class="sectionhead"><h2>Estado de la jornada</h2></div><div class="grid"><div class="stat"><small>EVENTO</small><strong>${esc(stateTxt())}</strong></div><div class="stat"><small>PRUEBAS</small><strong>${visibleChallenges()?A.challenges.length:'Ocultas'}</strong></div><div class="stat"><small>INSCRIPCIONES</small><strong>${A.control?.registrationOpen?'Abiertas':'Cerradas'}</strong></div></div>
   <div class="panel"><h3>¿Cómo participar?</h3><p>Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo, y cuando comience el concurso pega las URLs de las fotografías en sus pruebas correspondientes.</p>${!isLive()?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>`;}
 function team(){if(!A.team){return `<div class="panel"><h2>Crear equipo</h2><p>Solo necesitas los nombres y State IDs de 2 a 4 jugadores, más un teléfono dentro del juego.</p>${A.control?.registrationOpen&&A.control?.status==='registration'?registerForm():'<div class="notice warn">Las inscripciones están cerradas. Espera a que la organización las abra.</div>'}</div><div class="panel"><h3>Ya tengo un enlace privado</h3><form id="accessTeam"><label>Código privado del equipo</label><div class="fields2"><input name="code" maxlength="64" placeholder="Código de 48 caracteres" required><button class="primary" type="submit">Entrar</button></div></form><p class="hint">También puedes abrir el enlace que te envió el capitán.</p></div>`;}
@@ -96,11 +108,11 @@ function ranking(){if(!A.scores.length)return `<div class="panel"><h2>Clasificac
  return `<div class="panel"><h2>Clasificación oficial</h2><p>Primero la puntuación; en empate con cartón completo, termina antes quien entregó antes su última fotografía válida. Las entregas pendientes no puntúan.</p><div class="table-wrap"><table><thead><tr><th>Posición</th><th>Equipo</th><th>Puntos</th><th>Validadas</th><th>Finalización</th></tr></thead><tbody>${arr.map((x,i)=>`<tr><td><b>${i+1}º</b></td><td class="name">${esc(x.teamName)}</td><td>${Number(x.points||0)}</td><td>${Number(x.approvedCount||0)}</td><td>${x.completedAt?fmt(x.completedAt):'—'}</td></tr>`).join('')}</tbody></table></div></div>`;}
 function admin(){if(!A.adminMode)return `<div class="panel" style="max-width:520px;margin:10px auto"><img src="assets/emblema.webp" alt="TRASA" style="display:block;width:70px;margin:0 auto 20px"><h2>Acceso a Administración</h2><p>Solo la organización puede modificar equipos, aprobar fotos e iniciar el evento. Este acceso se verifica en Firebase Authentication.</p><form id="adminLogin"><div class="field"><label>Correo de administrador</label><input name="email" type="email" autocomplete="username" required placeholder="correo@ejemplo.com"></div><div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required></div><button class="primary" type="submit" data-busy>Entrar</button></form><p class="hint">Los participantes no necesitan correo, contraseñas ni cuentas vinculadas.</p></div>`;
  return `<div class="row" style="margin:0 0 16px"><span class="chip approved">Administrador conectado</span><button class="plain" data-action="adminLogout">Cerrar sesión</button></div><div class="admin-tabs">${adminTabs.map((v,i)=>`<button class="${A.adminTab===v?'primary':'secondary'}" data-action="adminTab" data-tab="${v}">${['Resumen','Equipos','Revisar fotos','Pruebas'][i]}</button>`).join('')}</div>${({general:adminGeneral,equipos:adminTeams,revisiones:adminReviews,retos:adminChallenges}[A.adminTab]||adminGeneral)()}`;}
-function adminGeneral(){return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>ESTADO</small><strong>${esc(stateTxt())}</strong></div></div><div class="panel"><h2>Control de la jornada</h2><p>Las pruebas quedan ocultas hasta iniciar el concurso. Asegúrate de importarlas antes de pulsar «Iniciar».</p>${!A.control?`<button class="primary" data-action="setupEvent">Crear jornada inicial</button>`:`<div class="actions"><button class="${A.control.registrationOpen?'danger':'secondary'}" data-action="toggleRegistrations">${A.control.registrationOpen?'Cerrar inscripciones':'Abrir inscripciones'}</button><button class="primary" data-action="startEvent" ${isLive()||A.control.status==='finished'||!A.challenges.length?'disabled':''}>Iniciar concurso</button><button class="danger" data-action="finishEvent" ${!isLive()?'disabled':''}>Finalizar concurso</button></div>`}<p class="hint">Para volver a probar desde cero, usa un nuevo proyecto de Firebase o restablece los datos de forma controlada. No se reinician automáticamente los equipos ni las pruebas.</p></div>`;}
+function adminGeneral(){return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>ESTADO</small><strong>${esc(stateTxt())}</strong></div></div><div class="panel"><h2>Control de la jornada</h2><p>Las pruebas quedan ocultas hasta iniciar el concurso. Asegúrate de importarlas antes de pulsar «Iniciar».</p>${!A.control?`<button class="primary" data-action="setupEvent">Crear jornada inicial</button>`:`<div class="actions"><button class="${A.control.registrationOpen?'danger':'secondary'}" data-action="toggleRegistrations">${A.control.registrationOpen?'Cerrar inscripciones':'Abrir inscripciones'}</button><button class="primary" data-action="startEvent" ${isLive()||A.control.status==='finished'||!A.challenges.length?'disabled':''}>Iniciar concurso</button><button class="danger" data-action="finishEvent" ${!isLive()?'disabled':''}>Finalizar concurso</button></div>`}<p class="hint">Para volver a probar desde cero, usa un nuevo proyecto de Firebase o restablece los datos de forma controlada. No se reinician automáticamente los equipos ni las pruebas.</p></div><div class="panel"><h2>Nombre y descripción del evento</h2><p>Estos textos aparecen en la portada y puedes cambiarlos cuando quieras. Los ajustes se guardan en Firebase y se actualizan para todos los participantes.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}" placeholder="Ej. Operación Ojo Verde"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required placeholder="Explica de qué trata el evento...">${esc(eventDescription())}</textarea></div><button type="submit" class="primary" data-busy ${!A.control?'disabled':''}>Guardar información del evento</button>${!A.control?'<p class="hint">Primero crea la jornada para activar este formulario.</p>':''}</form></div>`;}
 function adminTeams(){if(!A.allTeams.length)return `<div class="panel">${blank('No hay equipos inscritos.')}</div>`;
-return `<div class="panel"><h2>Equipos y participantes</h2>${A.allTeams.map(t=>`<div class="teamitem"><div><strong>${esc(t.name)}</strong><div class="muted">${t.members.length} jugadores · ${esc(t.phone)}</div></div><div class="actions"><button class="secondary" data-action="adminTeam" data-id="${esc(t.id)}">Ver / editar</button><button class="plain" data-action="adminOpenReviews" data-id="${esc(t.id)}">Fotografías</button></div></div>`).join('')}</div>${A.adminSelected?adminTeamEditor():''}`;}
+return `<div class="panel"><h2>Equipos y participantes</h2>${A.allTeams.map(t=>`<div class="teamitem"><div><strong>${esc(t.name)}</strong><div class="muted">${t.members.length} jugadores · ${esc(t.phone)}</div></div><div class="actions"><button class="secondary" data-action="adminTeam" data-id="${esc(t.id)}">Ver / editar</button><button class="plain" data-action="adminOpenReviews" data-id="${esc(t.id)}">Fotografías</button><button class="danger" data-action="deleteTeam" data-id="${esc(t.id)}" title="Borrar equipo e inscripciones">Eliminar equipo</button></div></div>`).join('')}</div>${A.adminSelected?adminTeamEditor():''}`;}
 function adminTeamEditor(){let t=A.allTeams.find(t=>t.id===A.adminSelected);if(!t)return '';
-return `<div class="panel"><div class="row"><h2>Editar: ${esc(t.name)}</h2><button class="plain" data-action="closeTeamEditor">Cerrar</button></div><form id="editTeam"><div class="fields2"><div class="field"><label>Nombre del equipo</label><input name="teamName" value="${esc(t.name)}" required></div><div class="field"><label>Teléfono</label><input name="phone" value="${esc(t.phone)}" required></div></div>${Array.from({length:4},(_,i)=>`<div class="person"><strong>Participante ${i+1} ${i>=2?'(opcional)':''}</strong><div class="fields2"><input name="player${i+1}" value="${esc(t.members[i]?.name||'')}" placeholder="Nombre"><input name="id${i+1}" value="${esc(t.members[i]?.stateId||'')}" placeholder="State ID"></div></div>`).join('')}<button class="primary" type="submit" data-busy>Guardar cambios</button></form><div class="hr"></div><button class="secondary" data-action="copySpecific" data-id="${esc(t.id)}">Copiar enlace privado</button><p class="hint">La modificación actualiza las reservas de State IDs y nombres de equipo en una transacción.</p></div>`;}
+return `<div class="panel"><div class="row"><h2>Editar: ${esc(t.name)}</h2><button class="plain" data-action="closeTeamEditor">Cerrar</button></div><form id="editTeam"><div class="fields2"><div class="field"><label>Nombre del equipo</label><input name="teamName" value="${esc(t.name)}" required></div><div class="field"><label>Teléfono</label><input name="phone" value="${esc(t.phone)}" required></div></div>${Array.from({length:4},(_,i)=>`<div class="person"><strong>Participante ${i+1} ${i>=2?'(opcional)':''}</strong><div class="fields2"><input name="player${i+1}" value="${esc(t.members[i]?.name||'')}" placeholder="Nombre"><input name="id${i+1}" value="${esc(t.members[i]?.stateId||'')}" placeholder="State ID"></div></div>`).join('')}<button class="primary" type="submit" data-busy>Guardar cambios</button></form><div class="hr"></div><div class="actions"><button class="secondary" data-action="copySpecific" data-id="${esc(t.id)}">Copiar enlace privado</button><button class="danger" data-action="deleteTeam" data-id="${esc(t.id)}">Eliminar equipo definitivamente</button></div><p class="hint">La modificación actualiza las reservas de State IDs y nombres de equipo en una transacción. La eliminación borra también las entregas y libera los State IDs; no puede deshacerse.</p></div>`;}
 function adminReviews(){let t=A.allTeams.find(t=>t.id===A.adminSelected);
  return `<div class="panel"><h2>Revisión de fotografías</h2><div class="field"><label>Filtrar por equipo</label><select id="reviewTeam"><option value="">Todos los equipos</option>${A.allTeams.map(t=>`<option value="${esc(t.id)}" ${t.id===A.adminSelected?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><p>Abre cada URL en otra pestaña. Firebase registra la hora original de recepción, independientemente de cuándo apruebes la fotografía.</p><div class="table-wrap"><table><thead><tr><th>Equipo</th><th>Prueba</th><th>Enviada</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${A.allSubs.filter(s=>!A.adminSelected||s.teamId===A.adminSelected).sort((a,b)=>unix(b.submittedAt)-unix(a.submittedAt)).map(s=>`<tr><td>${esc(A.allTeams.find(t=>t.id===s.teamId)?.name||'—')}</td><td>${esc(A.challenges.find(t=>t.id===s.id)?.title||s.id)}</td><td>${fmt(s.submittedAt)}</td><td>${statusBadge(s.status)}</td><td><div class="actions"><a class="button secondary" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Abrir ↗</a>${s.status!=='approved'?`<button class="primary" data-action="reviewApprove" data-team="${esc(s.teamId)}" data-id="${esc(s.id)}">Aprobar</button>`:''}${s.status!=='rejected'?`<button class="danger" data-action="reviewReject" data-team="${esc(s.teamId)}" data-id="${esc(s.id)}">Rechazar</button>`:''}</div></td></tr>`).join('')}</tbody></table>${!A.allSubs.length?blank('Todavía no hay entregas.'):''}</div></div>`;}
 function adminChallenges(){return `<div class="panel"><h2>Pruebas privadas</h2><div class="notice warn"><strong>Importante</strong>Las pruebas se guardan en Firestore. No subas el archivo JSON privado a GitHub: los jugadores podrían leerlo antes del evento.</div><div class="actions"><label class="button secondary" style="display:inline-flex;cursor:pointer">Importar JSON privado <input id="importChallenges" type="file" accept=".json,application/json" style="display:none"></label><button class="primary" data-action="createChallenge">Añadir una prueba</button></div><p class="hint">Puedes importarlas o editarlas mientras preparas el evento. Se recomienda no cambiar las pruebas una vez iniciada la competición.</p><div class="hr"></div>${A.challenges.map(t=>`<div class="teamitem"><div><strong>${esc(t.id)} · ${esc(t.title)}</strong><div class="muted">${Number(t.points)} pts · ${esc(t.category||'')}</div></div><button class="secondary" data-action="editChallenge" data-id="${esc(t.id)}">Editar</button></div>`).join('')||blank('No hay pruebas; importa el JSON privado de ejemplo.')}</div>${A.challengeEditor!==null?challengeForm():''}`;}
@@ -154,8 +166,17 @@ async function loginAdmin(form){let email=form.elements.email.value.trim(),passw
  if(!email||!password)throw Error('Introduce correo y contraseña de administración.');
  await signInWithEmailAndPassword(A.auth,email,password);A.adminTab='general';await loadAdmin();notify('Sesión de administración iniciada.');}
 async function logoutAdmin(){await signOut(A.auth);A.adminMode=false;A.allTeams=[];A.allSubs=[];A.challenges=[];A.adminSelected='';A.challengeEditor=null;await signInAnonymously(A.auth);navigate('home');}
-async function setupEvent(){await setDoc(doc(A.db,'control','main'),{status:'registration',registrationOpen:true,startedAt:null,finishedAt:null,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
+async function setupEvent(){await setDoc(doc(A.db,'control','main'),{status:'registration',registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
 async function updateControl(values){await updateDoc(doc(A.db,'control','main'),values);notify('Estado del concurso actualizado.');}
+async function saveEventDetails(form){
+ if(!A.adminMode||!A.control)throw Error('Debes iniciar sesión y crear la jornada.');
+ const name=form.elements.eventName.value.trim();
+ const description=form.elements.eventDescription.value.trim();
+ if(name.length<3||name.length>75)throw Error('El nombre debe tener entre 3 y 75 caracteres.');
+ if(description.length<10||description.length>600)throw Error('La descripción debe tener entre 10 y 600 caracteres.');
+ await updateDoc(doc(A.db,'control','main'),{eventName:name,eventDescription:description});
+ notify('Información del evento guardada y publicada.');
+}
 async function saveTeamEdits(form){const t=A.allTeams.find(x=>x.id===A.adminSelected);if(!t)throw Error('No has seleccionado un equipo.');
  const members=readMembers(form,4).filter(m=>m.name||m.stateId);verifyMembers(members);
  const name=form.elements.teamName.value.trim(),nameKey=slug(name),phone=form.elements.phone.value.trim();
@@ -174,6 +195,32 @@ async function saveTeamEdits(form){const t=A.allTeams.find(x=>x.id===A.adminSele
  const scoreRef=doc(A.db,'scores',t.id);const existingScore=await getDoc(scoreRef);
  if(existingScore.exists())await updateDoc(scoreRef,{teamName:name});
  await loadAdmin();notify('Equipo y reservas de State IDs actualizados.');}
+async function deleteTeamCompletely(teamId){
+ if(!A.adminMode)throw Error('Solo la administración puede eliminar equipos.');
+ const t=A.allTeams.find(x=>x.id===teamId);
+ if(!t)throw Error('No se encuentra el equipo solicitado.');
+ const teamRef=doc(A.db,'teams',teamId);
+ // Primero bloqueamos nuevas entregas: las reglas Firestore verifican `blocked`.
+ await updateDoc(teamRef,{blocked:true});
+ const subs=await getDocs(collection(A.db,'teams',teamId,'submissions'));
+ if(subs.size>450)throw Error('Hay demasiadas entregas para borrarlas de una vez; contacta con el administrador técnico.');
+ const batch=writeBatch(A.db);
+ for(const entry of subs.docs)batch.delete(entry.ref);
+ for(const stateId of new Set(t.memberIds||[]))batch.delete(doc(A.db,'stateClaims',stateId));
+ batch.delete(doc(A.db,'captains',t.ownerUid));
+ batch.delete(doc(A.db,'teamNames',t.nameKey));
+ batch.delete(doc(A.db,'scores',teamId));
+ batch.delete(teamRef);
+ await batch.commit();
+ if(A.teamId===teamId){
+   unsubscribeSubmissions();unsubscribeTeam();
+   A.teamId='';A.team=null;A.submissions=[];A.subSelected='';
+   localStorage.removeItem(teamKey);history.replaceState(null,'',location.pathname+location.search);
+ }
+ A.adminSelected='';
+ await loadAdmin();
+ notify(`Equipo «${t.name}» eliminado; State IDs liberados.`);
+}
 async function review(teamId,id,approve){if(!A.adminMode)throw Error('Solo Administración puede revisar.');
  const reason=approve?'':window.prompt('Indica el motivo del rechazo (visible para el equipo):','La imagen no demuestra el objetivo solicitado.');
  if(!approve&&reason===null)return;
@@ -226,6 +273,14 @@ root.addEventListener('click',async e=>{
   if(action==='toggleRegistrations'){await updateControl({registrationOpen:!A.control.registrationOpen});return;}
   if(action==='startEvent'){if(!confirm('¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la competición.'))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
   if(action==='finishEvent'){if(!confirm('¿Finalizar la jornada? Ya no se podrán entregar fotografías.'))return;await updateControl({status:'finished',registrationOpen:false,finishedAt:serverTimestamp()});return;}
+  if(action==='deleteTeam'){
+    const t=A.allTeams.find(x=>x.id===btn.dataset.id);
+    if(!t)throw Error('No se encuentra el equipo.');
+    const respuesta=window.prompt(`ATENCIÓN: borrarás «${t.name}», sus ${t.members.length} participantes, todas las fotografías y su clasificación. Se liberarán sus State IDs.\n\nPara confirmar, escribe exactamente el nombre del equipo:`, '');
+    if(respuesta===null)return;
+    if(respuesta!==t.name){notify('Eliminación cancelada: el nombre no coincide.');return;}
+    loading(true);await deleteTeamCompletely(t.id);return;
+  }
   if(action==='adminTeam'){A.adminSelected=btn.dataset.id;refresh();return;}
   if(action==='adminOpenReviews'){A.adminSelected=btn.dataset.id;A.adminTab='revisiones';await loadAdmin();return;}
   if(action==='closeTeamEditor'){A.adminSelected='';refresh();return;}
@@ -241,6 +296,7 @@ root.addEventListener('submit',async e=>{
  else if(form.id==='accessTeam'){await openTeam(form.elements.code.value.trim());navigate('team');}
  else if(form.id==='adminLogin')await loginAdmin(form);
  else if(form.id==='editTeam')await saveTeamEdits(form);
+ else if(form.id==='eventDetails')await saveEventDetails(form);
  else if(form.id==='challengeForm')await saveChallenge(form);
  else if(form.id==='photoForm'){
    if(!confirm('¿Confirmar entrega? No podrás sustituirla hasta que Administración la rechace.'))return;
