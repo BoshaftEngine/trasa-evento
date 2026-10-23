@@ -7,15 +7,25 @@ const root = document.querySelector('#root');
 const badge = document.querySelector('#eventBadge');
 const conn = document.querySelector('#connectionBadge');
 const title = document.querySelector('#pageTitle');
-const adminTabs = ['general','equipos','revisiones','retos'];
+const adminTabs = ['general','premios','equipos','revisiones','retos','historico'];
 const teamKey = 'trasa_ojo_verde_equipo';
 const DEFAULT_EVENT_NAME = 'Operación Ojo Verde';
 const DEFAULT_EVENT_DESCRIPTION = 'Explora San Andreas, identifica residuos y lugares de recuperación y demuestra tu trabajo con fotografías. Cuantas más pruebas válidas, más puntos.';
 function eventName(){ return A.control?.eventName || DEFAULT_EVENT_NAME; }
 function eventDescription(){ return A.control?.eventDescription || DEFAULT_EVENT_DESCRIPTION; }
+const PRIZE_KEYS = ['first','second','third','participation'];
+const DEFAULT_PRIZES = {
+  first:{cash:800,materials:300,note:'Premio para el equipo ganador'},
+  second:{cash:500,materials:200,note:'Segundo equipo clasificado'},
+  third:{cash:300,materials:100,note:'Tercer equipo clasificado'},
+  participation:{cash:600,materials:0,note:'Pago máximo por equipo que complete la misión, sujeto a penalizaciones por daños'}
+};
+const PRIZE_LABELS = {first:'🥇 Primer puesto',second:'🥈 Segundo puesto',third:'🥉 Tercer puesto',participation:'✅ Completar el evento'};
+function prizeSettings(){return Object.fromEntries(PRIZE_KEYS.map(k=>[k,{...DEFAULT_PRIZES[k],...(A.control?.prizes?.[k]||{})}]));}
+function prizeSummary(k,p){return [Number(p.cash)>0?`${Number(p.cash).toLocaleString('es-ES')} $`:null,Number(p.materials)>0?`${Number(p.materials)} materiales gratis`:null].filter(Boolean).join(' + ')||'Sin premio económico';}
 const A = { app:null,auth:null,db:null,user:null,view:'home',adminTab:'general',adminMode:false,
   control:null,teamId:sessionTeamId(),team:null,submissions:[],challenges:[],scores:[],allTeams:[],adminSelected:'',allSubs:[],
-  membersCount:2,subSelected:'',busy:false,unsubs:[],challengeEditor:null };
+  membersCount:2,subSelected:'',busy:false,unsubs:[],challengeEditor:null,archives:[] };
 
 function esc(v='') { return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(t){ const x=t?.toDate?t.toDate():t instanceof Date?t:null;return x?x.toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'; }
@@ -29,7 +39,7 @@ function notify(msg){const x=document.querySelector('#toast');x.textContent=msg;
 function problem(e){const msg=String(e?.message||e||'Error desconocido');console.error(e);notify((e?.code==='permission-denied'||msg.includes('permission-denied'))?'Acceso denegado: revisa los permisos, el registro de State IDs y el estado del evento.':msg);}
 function loading(v){A.busy=v;document.querySelectorAll('[data-busy]').forEach(x=>x.disabled=v);}
 function canUse(){return !!A.db && !!A.user;}
-function stateTxt(){let s=A.control?.status;return s==='live'?'EVENTO EN CURSO':s==='finished'?'EVENTO CERRADO':s==='registration'?'INSCRIPCIONES':'SIN PREPARAR';}
+function stateTxt(){let s=A.control?.status;return s==='live'?'EVENTO EN CURSO':s==='finished'?'EVENTO CERRADO':s==='registration'?'INSCRIPCIONES':s==='resetting'?'PREPARANDO EDICIÓN':'SIN PREPARAR';}
 function isLive(){return A.control?.status==='live';}
 function visibleChallenges(){return isLive()||A.control?.status==='finished'||A.adminMode;}
 function getTeamId(){return A.teamId&&/^[A-Za-z0-9_-]{32,64}$/.test(A.teamId)?A.teamId:'';}
@@ -44,7 +54,7 @@ async function start(){
   try{
     A.app=initializeApp(firebaseConfig);A.auth=getAuth(A.app);A.db=getFirestore(A.app);
     onAuthStateChanged(A.auth,async user=>{
-      A.user=user;A.adminMode=!!user&&!user.isAnonymous;
+      A.user=user;A.adminMode=!!user&&!user.isAnonymous; // Solo interfaz; Firestore comprueba UID administrador en el servidor.
       conn.textContent=user?(user.isAnonymous?'Conectado':'Sesión administrador'):'Conectando…';
       conn.className='pill '+(user?'ok':'');
       if(!user){try{await signInAnonymously(A.auth);}catch(e){problem(e)}return;}
@@ -58,12 +68,16 @@ async function start(){
 let unsubscribeControl=()=>{}, unsubscribeTeam=()=>{}, unsubscribeSubmissions=()=>{}, unsubscribeScores=()=>{};
 function subscribeControl(){unsubscribeControl();unsubscribeScores();
   unsubscribeControl=onSnapshot(doc(A.db,'control','main'),s=>{A.control=s.exists()?s.data():null;refresh();if(visibleChallenges()&&A.view==='tasks')loadChallenges();},problem);
-  unsubscribeScores=onSnapshot(collection(A.db,'scores'),s=>{A.scores=s.docs.map(d=>({id:d.id,...d.data()}));if(A.view==='ranking'||A.view==='home')refresh();},problem);
+  // El ranking público no contiene IDs privados de equipo ni datos personales.
+  unsubscribeScores=onSnapshot(doc(A.db,'leaderboard','current'),s=>{
+    A.scores=s.exists()&&Array.isArray(s.data().results)?s.data().results:[];
+    if(A.view==='ranking'||A.view==='home')refresh();
+  },problem);
 }
 async function openTeam(id,quiet=false){
   if(!/^[A-Za-z0-9_-]{32,64}$/.test(id))throw Error('Código de equipo inválido.');
   try{
-    const snapshot=await getDoc(doc(A.db,'teams',id));if(!snapshot.exists())throw Error('No se encuentra el equipo. Comprueba el enlace.');
+    const snapshot=await getDoc(doc(A.db,'teams',id));if(!snapshot.exists()){if(quiet){A.teamId='';A.team=null;A.submissions=[];localStorage.removeItem(teamKey);history.replaceState(null,'',location.pathname+location.search);}throw Error('No se encuentra el equipo. Comprueba el enlace.');}
     A.teamId=id;A.team={id,...snapshot.data()};localStorage.setItem(teamKey,id);
     history.replaceState(null,'',urlForTeam(id));
     unsubscribeTeam();unsubscribeSubmissions();
@@ -90,7 +104,8 @@ function refresh(){if(!A.db)return;
 }
 function home(){return `<section class="hero"><div><div class="eyebrow">TRASA PRESENTA</div><h2>${esc(eventName())}</h2><p class="event-description">${esc(eventDescription())}</p><div class="actions"><button class="button white" data-action="team">Acceder a mi equipo →</button><button class="button white" data-action="tasks">Consultar pruebas ↗</button></div></div><img class="hero-logo" src="assets/logotipo.webp" alt="TRASA · Tratamiento de Residuos Antón"></section>
   <div class="sectionhead"><h2>Estado de la jornada</h2></div><div class="grid"><div class="stat"><small>EVENTO</small><strong>${esc(stateTxt())}</strong></div><div class="stat"><small>PRUEBAS</small><strong>${visibleChallenges()?A.challenges.length:'Ocultas'}</strong></div><div class="stat"><small>INSCRIPCIONES</small><strong>${A.control?.registrationOpen?'Abiertas':'Cerradas'}</strong></div></div>
-  <div class="panel"><h3>¿Cómo participar?</h3><p>Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo, y cuando comience el concurso pega las URLs de las fotografías en sus pruebas correspondientes.</p>${!isLive()?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>`;}
+  <div class="panel"><h3>¿Cómo participar?</h3><p>Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo, y cuando comience el concurso pega las URLs de las fotografías en sus pruebas correspondientes.</p>${!isLive()&&A.control?.status!=='finished'?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>
+  ${A.control?`<div class="panel"><h3>Premios de esta edición</h3><div class="reward-grid">${PRIZE_KEYS.map(k=>{const p=prizeSettings()[k];return `<div class="reward-item"><strong>${esc(PRIZE_LABELS[k])}</strong><span>${esc(prizeSummary(k,p))}</span>${p.note?`<small>${esc(p.note)}</small>`:''}</div>`;}).join('')}</div><p class="hint">Los vales de reciclaje son por equipo. Los importes y condiciones son los publicados por la organización.</p></div>`:''}`;}
 function team(){if(!A.team){return `<div class="panel"><h2>Crear equipo</h2><p>Solo necesitas los nombres y State IDs de 2 a 4 jugadores, más un teléfono dentro del juego.</p>${A.control?.registrationOpen&&A.control?.status==='registration'?registerForm():'<div class="notice warn">Las inscripciones están cerradas. Espera a que la organización las abra.</div>'}</div><div class="panel"><h3>Ya tengo un enlace privado</h3><form id="accessTeam"><label>Código privado del equipo</label><div class="fields2"><input name="code" maxlength="64" placeholder="Código de 48 caracteres" required><button class="primary" type="submit">Entrar</button></div></form><p class="hint">También puedes abrir el enlace que te envió el capitán.</p></div>`;}
   return `<div class="panel"><div class="row"><div><div class="eyebrow">TU EXPEDIENTE</div><h2>${esc(A.team.name)}</h2></div><span class="chip approved">${A.team.members.length} participantes</span></div><p>Teléfono de contacto: <b>${esc(A.team.phone)}</b></p><div class="hr"></div><h3>Participantes inscritos</h3>${A.team.members.map((m,i)=>`<div class="teamitem"><span>${i+1}. <strong>${esc(m.name)}</strong></span><span class="muted">State ID: ${esc(m.stateId)}</span></div>`).join('')}<div class="hr"></div><h3>Enlace privado</h3><div class="code">${esc(urlForTeam(A.teamId))}</div><div class="actions"><button class="secondary" data-action="copyTeam">Copiar enlace</button><button class="plain" data-action="forgetTeam">Salir de este equipo en este navegador</button></div><p class="secret-note">Cualquiera con el enlace podrá consultar y presentar pruebas para el equipo. No lo publiques en canales abiertos.</p></div>`;}
 function memberFields(n,p={}){return `<div class="person"><strong>Participante ${n} ${n===1?'· Capitán':''}</strong><div class="fields2"><div><label>Nombre del personaje</label><input required name="player${n}" maxlength="70" value="${esc(p.name||'')}" placeholder="Nombre y apellido"></div><div><label>State ID</label><input required name="id${n}" maxlength="12" pattern="[0-9]{1,12}" inputmode="numeric" value="${esc(p.stateId||'')}" placeholder="Ej. 1842"></div></div></div>`;}
@@ -107,8 +122,30 @@ function ranking(){if(!A.scores.length)return `<div class="panel"><h2>Clasificac
  let arr=[...A.scores].sort((a,b)=>(b.points||0)-(a.points||0)||(b.approvedCount||0)-(a.approvedCount||0)||((a.completedAt?unix(a.completedAt):Infinity)-(b.completedAt?unix(b.completedAt):Infinity))||a.teamName.localeCompare(b.teamName));
  return `<div class="panel"><h2>Clasificación oficial</h2><p>Primero la puntuación; en empate con cartón completo, termina antes quien entregó antes su última fotografía válida. Las entregas pendientes no puntúan.</p><div class="table-wrap"><table><thead><tr><th>Posición</th><th>Equipo</th><th>Puntos</th><th>Validadas</th><th>Finalización</th></tr></thead><tbody>${arr.map((x,i)=>`<tr><td><b>${i+1}º</b></td><td class="name">${esc(x.teamName)}</td><td>${Number(x.points||0)}</td><td>${Number(x.approvedCount||0)}</td><td>${x.completedAt?fmt(x.completedAt):'—'}</td></tr>`).join('')}</tbody></table></div></div>`;}
 function admin(){if(!A.adminMode)return `<div class="panel" style="max-width:520px;margin:10px auto"><img src="assets/emblema.webp" alt="TRASA" style="display:block;width:70px;margin:0 auto 20px"><h2>Acceso a Administración</h2><p>Solo la organización puede modificar equipos, aprobar fotos e iniciar el evento. Este acceso se verifica en Firebase Authentication.</p><form id="adminLogin"><div class="field"><label>Correo de administrador</label><input name="email" type="email" autocomplete="username" required placeholder="correo@ejemplo.com"></div><div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required></div><button class="primary" type="submit" data-busy>Entrar</button></form><p class="hint">Los participantes no necesitan correo, contraseñas ni cuentas vinculadas.</p></div>`;
- return `<div class="row" style="margin:0 0 16px"><span class="chip approved">Administrador conectado</span><button class="plain" data-action="adminLogout">Cerrar sesión</button></div><div class="admin-tabs">${adminTabs.map((v,i)=>`<button class="${A.adminTab===v?'primary':'secondary'}" data-action="adminTab" data-tab="${v}">${['Resumen','Equipos','Revisar fotos','Pruebas'][i]}</button>`).join('')}</div>${({general:adminGeneral,equipos:adminTeams,revisiones:adminReviews,retos:adminChallenges}[A.adminTab]||adminGeneral)()}`;}
-function adminGeneral(){return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>ESTADO</small><strong>${esc(stateTxt())}</strong></div></div><div class="panel"><h2>Control de la jornada</h2><p>Las pruebas quedan ocultas hasta iniciar el concurso. Asegúrate de importarlas antes de pulsar «Iniciar».</p>${!A.control?`<button class="primary" data-action="setupEvent">Crear jornada inicial</button>`:`<div class="actions"><button class="${A.control.registrationOpen?'danger':'secondary'}" data-action="toggleRegistrations">${A.control.registrationOpen?'Cerrar inscripciones':'Abrir inscripciones'}</button><button class="primary" data-action="startEvent" ${isLive()||A.control.status==='finished'||!A.challenges.length?'disabled':''}>Iniciar concurso</button><button class="danger" data-action="finishEvent" ${!isLive()?'disabled':''}>Finalizar concurso</button></div>`}<p class="hint">Para volver a probar desde cero, usa un nuevo proyecto de Firebase o restablece los datos de forma controlada. No se reinician automáticamente los equipos ni las pruebas.</p></div><div class="panel"><h2>Nombre y descripción del evento</h2><p>Estos textos aparecen en la portada y puedes cambiarlos cuando quieras. Los ajustes se guardan en Firebase y se actualizan para todos los participantes.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}" placeholder="Ej. Operación Ojo Verde"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required placeholder="Explica de qué trata el evento...">${esc(eventDescription())}</textarea></div><button type="submit" class="primary" data-busy ${!A.control?'disabled':''}>Guardar información del evento</button>${!A.control?'<p class="hint">Primero crea la jornada para activar este formulario.</p>':''}</form></div>`;}
+ return `<div class="row" style="margin:0 0 16px"><span class="chip approved">Administrador conectado</span><button class="plain" data-action="adminLogout">Cerrar sesión</button></div><div class="admin-tabs">${adminTabs.map((v,i)=>`<button class="${A.adminTab===v?'primary':'secondary'}" data-action="adminTab" data-tab="${v}">${['Resumen','Premios','Equipos','Revisar fotos','Pruebas','Historial'][i]}</button>`).join('')}</div>${({general:adminGeneral,premios:adminPrizes,equipos:adminTeams,revisiones:adminReviews,retos:adminChallenges,historico:adminHistory}[A.adminTab]||adminGeneral)()}`;}
+function adminGeneral(){
+ const status=A.control?.status;
+ return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>EDICIÓN</small><strong>${Number(A.control?.editionNumber||1)}</strong></div></div>
+ <div class="panel"><h2>Control de la jornada</h2><p>Las pruebas están ocultas antes del inicio. Puedes reutilizar o editar las pruebas para la siguiente edición.</p>
+ ${!A.control?`<button class="primary" data-action="setupEvent">Crear jornada inicial</button>`:
+ `<div class="actions">
+ <button class="${A.control.registrationOpen?'danger':'secondary'}" data-action="toggleRegistrations" ${status!=='registration'?'disabled':''}>${A.control.registrationOpen?'Cerrar inscripciones':'Abrir inscripciones'}</button>
+ <button class="primary" data-action="startEvent" ${status!=='registration'||!A.challenges.length?'disabled':''}>Iniciar concurso</button>
+ <button class="danger" data-action="finishEvent" ${status!=='live'?'disabled':''}>Finalizar concurso</button>
+ ${status==='finished'?'<button class="primary" data-action="newEdition">Preparar nueva edición ↻</button>':''}
+ ${status==='resetting'?'<button class="primary" data-action="resumeEdition">Reanudar preparación ↻</button>':''}
+ </div>`}
+ ${status==='finished'?'<div class="notice warn"><strong>Antes de crear otra edición</strong>Termina de revisar las fotografías. Se archivará la clasificación; después se eliminarán los equipos, sus URLs y sus inscripciones actuales. Se liberarán los State IDs. Las pruebas y los premios configurados se conservarán. Si quieres conservar los enlaces de las fotos, expórtalos primero.</div><button class="secondary" data-action="exportDeliveries">Exportar entregas y enlaces CSV</button>':''}
+ ${status==='resetting'?'<div class="notice warn"><strong>Preparación interrumpida o en curso</strong>Las inscripciones siguen bloqueadas. Usa «Reanudar preparación» para completar la limpieza sin perder el archivo de resultados.</div>':''}
+ <div class="actions"><button class="secondary" data-action="publishLeaderboard" ${!A.control?'disabled':''}>Actualizar clasificación pública</button></div><p class="hint">Pulsa una vez tras actualizar desde una versión anterior, o si la clasificación no muestra resultados. No publica los códigos de equipo.</p>
+ </div>
+ <div class="panel"><h2>Nombre y descripción del evento</h2><p>Cambia los textos de la portada para la edición actual o la próxima.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required>${esc(eventDescription())}</textarea></div><button type="submit" class="primary" data-busy ${!A.control||status==='resetting'?'disabled':''}>Guardar información del evento</button></form></div>`;
+}
+function adminPrizes(){let prizes=prizeSettings();return `<div class="panel"><h2>Premios del concurso</h2><p>Modifica las recompensas por equipo. Los cambios aparecen automáticamente en la portada sin actualizar GitHub.</p>
+ <form id="prizesForm">${PRIZE_KEYS.map(k=>{const p=prizes[k];return `<div class="prize-edit"><h3>${esc(PRIZE_LABELS[k])}</h3><div class="fields2"><div class="field"><label>Recompensa en dólares ($)</label><input type="number" min="0" max="1000000" step="1" name="${k}Cash" required value="${Number(p.cash)||0}"></div><div class="field"><label>Materiales con reciclaje gratis</label><input type="number" min="0" max="100000" step="1" name="${k}Materials" required value="${Number(p.materials)||0}"></div></div><div class="field"><label>Condiciones / descripción</label><textarea name="${k}Note" maxlength="250">${esc(p.note||'')}</textarea></div></div>`;}).join('')}
+ <button type="submit" class="primary" data-busy ${!A.control||A.control?.status==='resetting'?'disabled':''}>Guardar premios</button></form>
+ <p class="hint">Los importes se muestran como recompensa por equipo. La categoría «Completar el evento» puede utilizarse para indicar el importe máximo sujeto al estado del vehículo.</p></div>`;}
+function adminHistory(){return `<div class="panel"><div class="row"><div><h2>Historial de ediciones</h2><p>Clasificaciones archivadas. El historial no incluye enlaces de fotografías.</p></div>${A.archives.length?'<button class="danger" data-action="deleteAllArchives">Borrar todo el historial</button>':''}</div><div class="notice warn"><strong>Atención</strong>El borrado de un evento archivado es definitivo. No altera la edición en curso ni libera los State IDs de la edición actual.</div>${A.archives.length?A.archives.map(a=>`<div class="archive-item"><div class="row"><strong>${esc(a.eventName||'Evento TRASA')} · Edición ${Number(a.editionNumber||1)}</strong><span class="muted">${fmt(a.finishedAt)}</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Equipo</th><th>Puntos</th><th>Fotos</th><th>Hora de finalización</th></tr></thead><tbody>${(a.results||[]).map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.teamName)}</td><td>${Number(r.points||0)}</td><td>${Number(r.approvedCount||0)}</td><td>${fmt(r.completedAt)}</td></tr>`).join('')}</tbody></table></div><div class="actions"><button class="secondary" data-action="exportArchive" data-id="${esc(a.id)}">Exportar clasificación CSV</button><button class="danger" data-action="deleteArchive" data-id="${esc(a.id)}">Eliminar del historial</button></div></div>`).join(''):blank('Aún no hay ediciones archivadas.')}</div>`;}
 function adminTeams(){if(!A.allTeams.length)return `<div class="panel">${blank('No hay equipos inscritos.')}</div>`;
 return `<div class="panel"><h2>Equipos y participantes</h2>${A.allTeams.map(t=>`<div class="teamitem"><div><strong>${esc(t.name)}</strong><div class="muted">${t.members.length} jugadores · ${esc(t.phone)}</div></div><div class="actions"><button class="secondary" data-action="adminTeam" data-id="${esc(t.id)}">Ver / editar</button><button class="plain" data-action="adminOpenReviews" data-id="${esc(t.id)}">Fotografías</button><button class="danger" data-action="deleteTeam" data-id="${esc(t.id)}" title="Borrar equipo e inscripciones">Eliminar equipo</button></div></div>`).join('')}</div>${A.adminSelected?adminTeamEditor():''}`;}
 function adminTeamEditor(){let t=A.allTeams.find(t=>t.id===A.adminSelected);if(!t)return '';
@@ -131,7 +168,7 @@ async function loadAdmin(){if(!A.adminMode||!A.db)return;
      const s=await getDocs(collection(A.db,'teams',t.id,'submissions'));
      return s.docs.map(d=>({id:d.id,teamId:t.id,...d.data()}));
    }));
-   A.allSubs=lists.flat();refresh();
+   A.allSubs=lists.flat();if(A.adminTab==='historico')await loadArchives();else refresh();
  }catch(e){problem(e)} }
 
 function readMembers(form,n){return Array.from({length:n},(_,i)=>{
@@ -165,8 +202,8 @@ async function savePhoto(id,link){if(!A.team||!isLive())throw Error('Evento cerr
 async function loginAdmin(form){let email=form.elements.email.value.trim(),password=form.elements.password.value;
  if(!email||!password)throw Error('Introduce correo y contraseña de administración.');
  await signInWithEmailAndPassword(A.auth,email,password);A.adminTab='general';await loadAdmin();notify('Sesión de administración iniciada.');}
-async function logoutAdmin(){await signOut(A.auth);A.adminMode=false;A.allTeams=[];A.allSubs=[];A.challenges=[];A.adminSelected='';A.challengeEditor=null;await signInAnonymously(A.auth);navigate('home');}
-async function setupEvent(){await setDoc(doc(A.db,'control','main'),{status:'registration',registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
+async function logoutAdmin(){await signOut(A.auth);A.adminMode=false;A.allTeams=[];A.allSubs=[];A.challenges=[];A.adminSelected='';A.challengeEditor=null;A.archives=[];await signInAnonymously(A.auth);navigate('home');}
+async function setupEvent(){if(!A.adminMode||A.control)throw Error('Solo puedes crear la jornada inicial si no existe otra.');await setDoc(doc(A.db,'control','main'),{status:'registration',editionNumber:1,registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,prizes:DEFAULT_PRIZES,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
 async function updateControl(values){await updateDoc(doc(A.db,'control','main'),values);notify('Estado del concurso actualizado.');}
 async function saveEventDetails(form){
  if(!A.adminMode||!A.control)throw Error('Debes iniciar sesión y crear la jornada.');
@@ -175,7 +212,132 @@ async function saveEventDetails(form){
  if(name.length<3||name.length>75)throw Error('El nombre debe tener entre 3 y 75 caracteres.');
  if(description.length<10||description.length>600)throw Error('La descripción debe tener entre 10 y 600 caracteres.');
  await updateDoc(doc(A.db,'control','main'),{eventName:name,eventDescription:description});
- notify('Información del evento guardada y publicada.');
+  notify('Información del evento guardada y publicada.');
+}
+async function savePrizes(form){
+ if(!A.adminMode||!A.control||A.control.status==='resetting')throw Error('No se pueden modificar los premios durante el cambio de edición.');
+ const prizes={};
+ for(const k of PRIZE_KEYS){
+  const cash=Number(form.elements[`${k}Cash`].value);
+  const materials=Number(form.elements[`${k}Materials`].value);
+  const note=form.elements[`${k}Note`].value.trim();
+  if(!Number.isSafeInteger(cash)||cash<0||cash>1000000||!Number.isSafeInteger(materials)||materials<0||materials>100000||note.length>250)throw Error(`Comprueba los premios del apartado ${PRIZE_LABELS[k]}.`);
+  prizes[k]={cash,materials,note};
+ }
+ await updateDoc(doc(A.db,'control','main'),{prizes});notify('Premios actualizados en la portada.');
+}
+function sortedScores(scores){return [...scores].sort((a,b)=>(b.points||0)-(a.points||0)||(b.approvedCount||0)-(a.approvedCount||0)||((a.completedAt?unix(a.completedAt):Infinity)-(b.completedAt?unix(b.completedAt):Infinity))||String(a.teamName||'').localeCompare(String(b.teamName||'')));}
+// Nunca publicar IDs privados de equipos como IDs de documentos de ranking.
+async function publishLeaderboard(){
+ if(!A.adminMode)throw Error('Solo Administración puede publicar la clasificación.');
+ const docs=(await getDocs(collection(A.db,'scores'))).docs;
+ const results=sortedScores(docs.map(d=>d.data())).slice(0,150).map(s=>({
+   teamName:String(s.teamName||'Equipo').slice(0,60),
+   points:Number(s.points||0),
+   approvedCount:Number(s.approvedCount||0),
+   completedAt:s.completedAt||null
+ }));
+ await setDoc(doc(A.db,'leaderboard','current'),{results,updatedAt:serverTimestamp()});
+}
+
+async function loadArchives(){if(!A.adminMode)return;
+ const snap=await getDocs(collection(A.db,'archives'));
+ A.archives=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>unix(b.archivedAt)-unix(a.archivedAt));refresh();
+}
+function exportDeliveries(){
+ if(!A.adminMode)throw Error('Solo Administración puede exportar las entregas.');
+ const teams=new Map(A.allTeams.map(t=>[t.id,t.name]));
+ const tests=new Map(A.challenges.map(t=>[t.id,t.title]));
+ const rows=[['Equipo','Prueba','URL','Estado','Intento','Fecha entrega','Motivo rechazo'],...A.allSubs.map(s=>[teams.get(s.teamId)||'Equipo eliminado',tests.get(s.id)||s.id,s.url||'',s.status||'',s.attempt||1,fmt(s.submittedAt),s.reason||''])];
+ downloadCsv(`TRASA_Entregas_Edicion_${Number(A.control?.editionNumber||1)}.csv`,rows);
+}
+function downloadCsv(name,rows){
+ const field=x=>{let val=String(x??'');if(/^[=+\-@\t\r]/.test(val))val="'"+val;return '"'+val.replaceAll('"','""')+'"';};
+ const csv='\ufeff'+rows.map(row=>row.map(field).join(';')).join('\r\n');
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),u=URL.createObjectURL(blob),link=document.createElement('a');
+ link.href=u;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(u),15000);
+}
+function exportArchive(id){const a=A.archives.find(a=>a.id===id);if(!a)throw Error('No se encuentra el archivo.');
+ const rows=[['Posición','Equipo','Puntos','Fotografías validadas','Finalización'],...(a.results||[]).map((r,i)=>[i+1,r.teamName,r.points,r.approvedCount,fmt(r.completedAt)])];
+ downloadCsv(`TRASA_Clasificacion_Edicion_${Number(a.editionNumber||1)}.csv`,rows);
+}
+async function deleteArchive(id){
+ if(!A.adminMode)throw Error('Solo Administración puede eliminar el historial.');
+ const a=A.archives.find(x=>x.id===id);
+ if(!a)throw Error('No se encuentra el evento archivado.');
+ const verification=window.prompt(`Eliminarás definitivamente el historial de «${a.eventName||'Evento TRASA'}» (edición ${Number(a.editionNumber||1)}).\n\nEscribe ELIMINAR para confirmar:`, '');
+ if(verification===null)return;
+ if(verification!=='ELIMINAR')throw Error('Operación cancelada: confirmación incorrecta.');
+ await deleteDoc(doc(A.db,'archives',id));
+ await loadArchives();notify('Edición eliminada del historial.');
+}
+async function deleteAllArchives(){
+ if(!A.adminMode)throw Error('Solo Administración puede eliminar el historial.');
+ if(!A.archives.length)return;
+ const verification=window.prompt(`Eliminarás DEFINITIVAMENTE las ${A.archives.length} ediciones archivadas.\nNo afecta a la edición activa.\n\nEscribe BORRAR HISTORIAL para confirmar:`, '');
+ if(verification===null)return;
+ if(verification!=='BORRAR HISTORIAL')throw Error('Operación cancelada: confirmación incorrecta.');
+ // Consulta al servidor, no solo a los archivos cargados previamente en pantalla.
+ const docs=(await getDocs(collection(A.db,'archives'))).docs;
+ for(let i=0;i<docs.length;i+=400){
+   const batch=writeBatch(A.db);
+   docs.slice(i,i+400).forEach(d=>batch.delete(d.ref));
+   await batch.commit();
+ }
+ await loadArchives();notify('Historial eliminado.');
+}
+async function prepareNextEdition(){
+ if(!A.adminMode||!A.control)throw Error('Solo la administración puede preparar otra edición.');
+ if(!['finished','resetting'].includes(A.control.status))throw Error('La edición actual debe estar finalizada.');
+ if(A.control.status==='finished'){
+  // Archivo y bloqueo se escriben en el mismo lote: si falla, no se borra nada.
+  const [teamSnap,scoreSnap]=await Promise.all([getDocs(collection(A.db,'teams')),getDocs(collection(A.db,'scores'))]);
+  const teamNameMap=new Map(teamSnap.docs.map(d=>[d.id,d.data().name]));
+  const scoreMap=new Map(scoreSnap.docs.map(d=>[d.id,d.data()]));
+  // Se archivan también los equipos que terminaron con cero fotografías aprobadas.
+  const allResults=teamSnap.docs.map(d=>({id:d.id,teamName:d.data().name,points:0,approvedCount:0,completedAt:null,...(scoreMap.get(d.id)||{})}));
+  // Por seguridad se incluyen puntuaciones huérfanas de equipos eliminados manualmente.
+  for(const score of scoreSnap.docs){if(!teamNameMap.has(score.id))allResults.push({id:score.id,teamName:score.data().teamName||'Equipo eliminado',...score.data()});}
+  const results=sortedScores(allResults).map(r=>({teamName:r.teamName,points:Number(r.points||0),approvedCount:Number(r.approvedCount||0),completedAt:r.completedAt||null}));
+  const archiveId=`edicion_${Number(A.control.editionNumber||1)}_${generateSecret().slice(0,12)}`;
+  const controlRef=doc(A.db,'control','main');
+  await runTransaction(A.db,async tx=>{
+   const fresh=await tx.get(controlRef);
+   if(!fresh.exists()||fresh.data().status!=='finished')throw Error('La edición ya está siendo preparada en otra sesión. Actualiza la página y pulsa Reanudar.');
+   tx.set(doc(A.db,'archives',archiveId),{
+    eventName:eventName(),eventDescription:eventDescription(),editionNumber:Number(fresh.data().editionNumber||1),
+    startedAt:fresh.data().startedAt||null,finishedAt:fresh.data().finishedAt||null,
+    prizes:prizeSettings(),results,archivedAt:serverTimestamp()
+   });
+   tx.update(controlRef,{status:'resetting',registrationOpen:false,archiveId});
+  });
+ }
+ // Al reanudar se limpian también residuos de intentos anteriores, sin tocar el archivo.
+ const teams=await getDocs(collection(A.db,'teams'));
+ for(const team of teams.docs){
+  const t=team.data();const subs=await getDocs(collection(A.db,'teams',team.id,'submissions'));
+  if(subs.size>440)throw Error(`El equipo ${t.name} tiene más de 440 entregas; requiere limpieza manual.`);
+  const b=writeBatch(A.db);
+  subs.docs.forEach(d=>b.delete(d.ref));
+  (t.memberIds||[]).forEach(id=>b.delete(doc(A.db,'stateClaims',String(id))));
+  if(t.ownerUid)b.delete(doc(A.db,'captains',t.ownerUid));
+  if(t.nameKey)b.delete(doc(A.db,'teamNames',t.nameKey));
+  b.delete(doc(A.db,'scores',team.id));b.delete(team.ref);await b.commit();
+ }
+ // Limpia también documentos huérfanos que pudieran quedar de eliminaciones fallidas.
+ for(const name of ['stateClaims','captains','teamNames','scores']){
+  const entries=(await getDocs(collection(A.db,name))).docs;
+  for(let i=0;i<entries.length;i+=400){const batch=writeBatch(A.db);entries.slice(i,i+400).forEach(d=>batch.delete(d.ref));await batch.commit();}
+ }
+ await updateDoc(doc(A.db,'control','main'),{
+  status:'registration',registrationOpen:true,editionNumber:Number(A.control.editionNumber||1)+1,
+  startedAt:null,finishedAt:null,archiveId:null,createdAt:serverTimestamp()
+ });
+ // Se mantienen premios, textos y pruebas privadas para poder reutilizarlos o editarlos.
+ await publishLeaderboard();
+ A.allTeams=[];A.allSubs=[];A.scores=[];A.team=null;A.teamId='';A.submissions=[];A.subSelected='';
+ localStorage.removeItem(teamKey);history.replaceState(null,'',location.pathname+location.search);
+ await loadAdmin();notify('Nueva edición preparada. Inscripciones abiertas y State IDs liberados.');
 }
 async function saveTeamEdits(form){const t=A.allTeams.find(x=>x.id===A.adminSelected);if(!t)throw Error('No has seleccionado un equipo.');
  const members=readMembers(form,4).filter(m=>m.name||m.stateId);verifyMembers(members);
@@ -193,7 +355,7 @@ async function saveTeamEdits(form){const t=A.allTeams.find(x=>x.id===A.adminSele
    if(t.nameKey!==nameKey){tx.delete(oldNameRef);tx.set(newNameRef,{teamId:t.id,createdAt:serverTimestamp()});}
  });
  const scoreRef=doc(A.db,'scores',t.id);const existingScore=await getDoc(scoreRef);
- if(existingScore.exists())await updateDoc(scoreRef,{teamName:name});
+ if(existingScore.exists()){await updateDoc(scoreRef,{teamName:name});await publishLeaderboard();}
  await loadAdmin();notify('Equipo y reservas de State IDs actualizados.');}
 async function deleteTeamCompletely(teamId){
  if(!A.adminMode)throw Error('Solo la administración puede eliminar equipos.');
@@ -212,6 +374,7 @@ async function deleteTeamCompletely(teamId){
  batch.delete(doc(A.db,'scores',teamId));
  batch.delete(teamRef);
  await batch.commit();
+ await publishLeaderboard();
  if(A.teamId===teamId){
    unsubscribeSubmissions();unsubscribeTeam();
    A.teamId='';A.team=null;A.submissions=[];A.subSelected='';
@@ -233,7 +396,8 @@ async function recomputeScore(teamId){const team=A.allTeams.find(t=>t.id===teamI
  const points=approved.reduce((n,s)=>n+Number(A.challenges.find(c=>c.id===s.id)?.points||0),0);
  const latest=approved.reduce((m,s)=>unix(s.submittedAt)>unix(m)?s.submittedAt:m,null);
  const completedAt=(A.challenges.length>0&&approved.length===A.challenges.length)?latest:null;
- await setDoc(doc(A.db,'scores',teamId),{teamName:team.name,points,approvedCount:approved.length,completedAt,updatedAt:serverTimestamp()});}
+ await setDoc(doc(A.db,'scores',teamId),{teamName:team.name,points,approvedCount:approved.length,completedAt,updatedAt:serverTimestamp()});
+ await publishLeaderboard();}
 async function saveChallenge(form){const id=form.elements.id.value.trim(),title=form.elements.title.value.trim();
  const description=form.elements.description.value.trim(),category=form.elements.category.value.trim();
  const points=Number(form.elements.points.value);
@@ -268,11 +432,17 @@ root.addEventListener('click',async e=>{
   if(action==='submitPhoto'){A.subSelected=btn.dataset.id;refresh();return;}
   if(action==='cancelPhoto'){A.subSelected='';refresh();return;}
   if(action==='adminLogout'){await logoutAdmin();return;}
-  if(action==='adminTab'){A.adminTab=btn.dataset.tab;A.adminSelected='';A.challengeEditor=null;if(A.adminTab==='revisiones')await loadAdmin();else refresh();return;}
+  if(action==='adminTab'){A.adminTab=btn.dataset.tab;A.adminSelected='';A.challengeEditor=null;if(['revisiones','historico'].includes(A.adminTab))await loadAdmin();else refresh();return;}
   if(action==='setupEvent'){await setupEvent();return;}
-  if(action==='toggleRegistrations'){await updateControl({registrationOpen:!A.control.registrationOpen});return;}
-  if(action==='startEvent'){if(!confirm('¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la competición.'))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
-  if(action==='finishEvent'){if(!confirm('¿Finalizar la jornada? Ya no se podrán entregar fotografías.'))return;await updateControl({status:'finished',registrationOpen:false,finishedAt:serverTimestamp()});return;}
+  if(action==='toggleRegistrations'){if(A.control?.status!=='registration')throw Error('Solo puedes cambiar inscripciones durante la fase de registro.');await updateControl({registrationOpen:!A.control.registrationOpen});return;}
+  if(action==='startEvent'){if(A.control?.status!=='registration')throw Error('Primero prepara la nueva edición.');if(!confirm('¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la competición.'))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
+  if(action==='finishEvent'){if(!isLive())throw Error('El concurso no está en curso.');if(!confirm('¿Finalizar la jornada? Ya no se podrán entregar fotografías.'))return;await updateControl({status:'finished',registrationOpen:false,finishedAt:serverTimestamp()});return;}
+  if(action==='newEdition'||action==='resumeEdition'){if(!confirm('Se archivará la clasificación y se borrarán todos los equipos, fotografías registradas y reservas de State IDs de la edición cerrada. Se conservarán las pruebas y los premios configurados. ¿Continuar?'))return;loading(true);await prepareNextEdition();return;}
+  if(action==='publishLeaderboard'){loading(true);await publishLeaderboard();notify('Clasificación pública actualizada sin códigos de equipo.');return;}
+  if(action==='exportArchive'){exportArchive(btn.dataset.id);return;}
+  if(action==='deleteArchive'){loading(true);await deleteArchive(btn.dataset.id);return;}
+  if(action==='deleteAllArchives'){loading(true);await deleteAllArchives();return;}
+  if(action==='exportDeliveries'){exportDeliveries();return;}
   if(action==='deleteTeam'){
     const t=A.allTeams.find(x=>x.id===btn.dataset.id);
     if(!t)throw Error('No se encuentra el equipo.');
@@ -297,6 +467,7 @@ root.addEventListener('submit',async e=>{
  else if(form.id==='adminLogin')await loginAdmin(form);
  else if(form.id==='editTeam')await saveTeamEdits(form);
  else if(form.id==='eventDetails')await saveEventDetails(form);
+ else if(form.id==='prizesForm')await savePrizes(form);
  else if(form.id==='challengeForm')await saveChallenge(form);
  else if(form.id==='photoForm'){
    if(!confirm('¿Confirmar entrega? No podrás sustituirla hasta que Administración la rechace.'))return;
