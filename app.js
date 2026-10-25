@@ -13,18 +13,46 @@ const DEFAULT_EVENT_NAME = 'Operación Ojo Verde';
 const DEFAULT_EVENT_DESCRIPTION = 'Explora San Andreas, identifica residuos y lugares de recuperación y demuestra tu trabajo con fotografías. Cuantas más pruebas válidas, más puntos.';
 function eventName(){ return A.control?.eventName || DEFAULT_EVENT_NAME; }
 function eventDescription(){ return A.control?.eventDescription || DEFAULT_EVENT_DESCRIPTION; }
-const PRIZE_KEYS = ['first','second','third','participation'];
-const DEFAULT_PRIZES = {
+// Premios configurables. Compatibilidad: las ediciones V1.3 utilizaban «prizes» con 4 puestos fijos.
+const LEGACY_PRIZE_KEYS = ['first','second','third','participation'];
+const LEGACY_PRIZE_LABELS = {first:'🥇 Primer puesto',second:'🥈 Segundo puesto',third:'🥉 Tercer puesto',participation:'✅ Completar el evento'};
+const LEGACY_DEFAULT_PRIZES = {
   first:{cash:800,materials:300,note:'Premio para el equipo ganador'},
   second:{cash:500,materials:200,note:'Segundo equipo clasificado'},
   third:{cash:300,materials:100,note:'Tercer equipo clasificado'},
   participation:{cash:600,materials:0,note:'Pago máximo por equipo que complete la misión, sujeto a penalizaciones por daños'}
 };
-const PRIZE_LABELS = {first:'🥇 Primer puesto',second:'🥈 Segundo puesto',third:'🥉 Tercer puesto',participation:'✅ Completar el evento'};
-function prizeSettings(){return Object.fromEntries(PRIZE_KEYS.map(k=>[k,{...DEFAULT_PRIZES[k],...(A.control?.prizes?.[k]||{})}]));}
-function prizeSummary(k,p){return [Number(p.cash)>0?`${Number(p.cash).toLocaleString('es-ES')} $`:null,Number(p.materials)>0?`${Number(p.materials)} materiales gratis`:null].filter(Boolean).join(' + ')||'Sin premio económico';}
+const DEFAULT_AWARDS = LEGACY_PRIZE_KEYS.map(k=>({
+  id:k,title:LEGACY_PRIZE_LABELS[k],...LEGACY_DEFAULT_PRIZES[k],extra:''
+}));
+function normalizeAward(item,index){
+  return {
+    id:String(item?.id||`premio_${index+1}`),
+    title:String(item?.title||`Premio ${index+1}`),
+    cash:Number(item?.cash||0),
+    materials:Number(item?.materials||0),
+    extra:String(item?.extra||''),
+    note:String(item?.note||'')
+  };
+}
+function prizeSettings(){
+  // [] significa que la organización ha elegido no anunciar premios.
+  if(Array.isArray(A.control?.awards))return A.control.awards.map(normalizeAward);
+  if(A.control?.prizes && typeof A.control.prizes==='object') {
+    return LEGACY_PRIZE_KEYS.map((k,i)=>normalizeAward({id:k,title:LEGACY_PRIZE_LABELS[k],...LEGACY_DEFAULT_PRIZES[k],...(A.control.prizes[k]||{})},i));
+  }
+  return DEFAULT_AWARDS.map((p,i)=>normalizeAward(p,i));
+}
+function prizeSummary(p){
+  return [
+    Number(p.cash)>0?`${Number(p.cash).toLocaleString('es-ES')} $`:null,
+    Number(p.materials)>0?`${Number(p.materials).toLocaleString('es-ES')} materiales gratis`:null,
+    String(p.extra||'').trim()||null
+  ].filter(Boolean).join(' + ')||'Recompensa indicada en las condiciones';
+}
+function newPrizeId(){return 'premio_'+generateSecret().slice(0,20);}
 const A = { app:null,auth:null,db:null,user:null,view:'home',adminTab:'general',adminMode:false,
-  control:null,teamId:sessionTeamId(),team:null,submissions:[],challenges:[],scores:[],allTeams:[],adminSelected:'',allSubs:[],
+  control:null,teamId:sessionTeamId(),team:null,submissions:[],challenges:[],scores:[],allTeams:[],adminSelected:'',allSubs:[],awardDraft:null,
   membersCount:2,subSelected:'',busy:false,unsubs:[],challengeEditor:null,archives:[] };
 
 function esc(v='') { return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -105,7 +133,7 @@ function refresh(){if(!A.db)return;
 function home(){return `<section class="hero"><div><div class="eyebrow">TRASA PRESENTA</div><h2>${esc(eventName())}</h2><p class="event-description">${esc(eventDescription())}</p><div class="actions"><button class="button white" data-action="team">Acceder a mi equipo →</button><button class="button white" data-action="tasks">Consultar pruebas ↗</button></div></div><img class="hero-logo" src="assets/logotipo.webp" alt="TRASA · Tratamiento de Residuos Antón"></section>
   <div class="sectionhead"><h2>Estado de la jornada</h2></div><div class="grid"><div class="stat"><small>EVENTO</small><strong>${esc(stateTxt())}</strong></div><div class="stat"><small>PRUEBAS</small><strong>${visibleChallenges()?A.challenges.length:'Ocultas'}</strong></div><div class="stat"><small>INSCRIPCIONES</small><strong>${A.control?.registrationOpen?'Abiertas':'Cerradas'}</strong></div></div>
   <div class="panel"><h3>¿Cómo participar?</h3><p>Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo, y cuando comience el concurso pega las URLs de las fotografías en sus pruebas correspondientes.</p>${!isLive()&&A.control?.status!=='finished'?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>
-  ${A.control?`<div class="panel"><h3>Premios de esta edición</h3><div class="reward-grid">${PRIZE_KEYS.map(k=>{const p=prizeSettings()[k];return `<div class="reward-item"><strong>${esc(PRIZE_LABELS[k])}</strong><span>${esc(prizeSummary(k,p))}</span>${p.note?`<small>${esc(p.note)}</small>`:''}</div>`;}).join('')}</div><p class="hint">Los vales de reciclaje son por equipo. Los importes y condiciones son los publicados por la organización.</p></div>`:''}`;}
+  ${A.control?`<div class="panel"><h3>Premios de esta edición</h3>${prizeSettings().length?`<div class="reward-grid">${prizeSettings().map(p=>`<div class="reward-item"><strong>${esc(p.title)}</strong><span>${esc(prizeSummary(p))}</span>${p.note?`<small>${esc(p.note)}</small>`:''}</div>`).join('')}</div><p class="hint">Las recompensas y sus condiciones se aplican según lo publicado por la organización.</p>`:'<p class="hint">Todavía no se han anunciado premios para esta edición.</p>'}</div>`:''}`;}
 function team(){if(!A.team){return `<div class="panel"><h2>Crear equipo</h2><p>Solo necesitas los nombres y State IDs de 2 a 4 jugadores, más un teléfono dentro del juego.</p>${A.control?.registrationOpen&&A.control?.status==='registration'?registerForm():'<div class="notice warn">Las inscripciones están cerradas. Espera a que la organización las abra.</div>'}</div><div class="panel"><h3>Ya tengo un enlace privado</h3><form id="accessTeam"><label>Código privado del equipo</label><div class="fields2"><input name="code" maxlength="64" placeholder="Código de 48 caracteres" required><button class="primary" type="submit">Entrar</button></div></form><p class="hint">También puedes abrir el enlace que te envió el capitán.</p></div>`;}
   return `<div class="panel"><div class="row"><div><div class="eyebrow">TU EXPEDIENTE</div><h2>${esc(A.team.name)}</h2></div><span class="chip approved">${A.team.members.length} participantes</span></div><p>Teléfono de contacto: <b>${esc(A.team.phone)}</b></p><div class="hr"></div><h3>Participantes inscritos</h3>${A.team.members.map((m,i)=>`<div class="teamitem"><span>${i+1}. <strong>${esc(m.name)}</strong></span><span class="muted">State ID: ${esc(m.stateId)}</span></div>`).join('')}<div class="hr"></div><h3>Enlace privado</h3><div class="code">${esc(urlForTeam(A.teamId))}</div><div class="actions"><button class="secondary" data-action="copyTeam">Copiar enlace</button><button class="plain" data-action="forgetTeam">Salir de este equipo en este navegador</button></div><p class="secret-note">Cualquiera con el enlace podrá consultar y presentar pruebas para el equipo. No lo publiques en canales abiertos.</p></div>`;}
 function memberFields(n,p={}){return `<div class="person"><strong>Participante ${n} ${n===1?'· Capitán':''}</strong><div class="fields2"><div><label>Nombre del personaje</label><input required name="player${n}" maxlength="70" value="${esc(p.name||'')}" placeholder="Nombre y apellido"></div><div><label>State ID</label><input required name="id${n}" maxlength="12" pattern="[0-9]{1,12}" inputmode="numeric" value="${esc(p.stateId||'')}" placeholder="Ej. 1842"></div></div></div>`;}
@@ -141,10 +169,30 @@ function adminGeneral(){
  </div>
  <div class="panel"><h2>Nombre y descripción del evento</h2><p>Cambia los textos de la portada para la edición actual o la próxima.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required>${esc(eventDescription())}</textarea></div><button type="submit" class="primary" data-busy ${!A.control||status==='resetting'?'disabled':''}>Guardar información del evento</button></form></div>`;
 }
-function adminPrizes(){let prizes=prizeSettings();return `<div class="panel"><h2>Premios del concurso</h2><p>Modifica las recompensas por equipo. Los cambios aparecen automáticamente en la portada sin actualizar GitHub.</p>
- <form id="prizesForm">${PRIZE_KEYS.map(k=>{const p=prizes[k];return `<div class="prize-edit"><h3>${esc(PRIZE_LABELS[k])}</h3><div class="fields2"><div class="field"><label>Recompensa en dólares ($)</label><input type="number" min="0" max="1000000" step="1" name="${k}Cash" required value="${Number(p.cash)||0}"></div><div class="field"><label>Materiales con reciclaje gratis</label><input type="number" min="0" max="100000" step="1" name="${k}Materials" required value="${Number(p.materials)||0}"></div></div><div class="field"><label>Condiciones / descripción</label><textarea name="${k}Note" maxlength="250">${esc(p.note||'')}</textarea></div></div>`;}).join('')}
- <button type="submit" class="primary" data-busy ${!A.control||A.control?.status==='resetting'?'disabled':''}>Guardar premios</button></form>
- <p class="hint">Los importes se muestran como recompensa por equipo. La categoría «Completar el evento» puede utilizarse para indicar el importe máximo sujeto al estado del vehículo.</p></div>`;}
+// Lee el editor visible para conservar los cambios aún no guardados al añadir, eliminar o mover una tarjeta.
+function prizeDraftFromForm(){
+  const form=root.querySelector('#prizesForm');
+  if(!form)return (A.awardDraft||prizeSettings()).map(x=>({...x}));
+  return [...form.querySelectorAll('[data-award-id]')].map((card,i)=>{
+    const field=name=>card.querySelector(`[data-award-field="${name}"]`)?.value??'';
+    return {id:card.dataset.awardId,title:field('title'),cash:field('cash'),materials:field('materials'),extra:field('extra'),note:field('note')};
+  });
+}
+function adminPrizes(){
+ const prizes=A.awardDraft===null?prizeSettings():A.awardDraft;
+ const locked=!A.control||A.control?.status==='resetting';
+ return `<div class="panel"><div class="row prize-heading"><div><h2>Premios del concurso</h2><p>Añade, elimina, renombra o reordena premios libremente. Puedes ofrecer un solo premio, dos, varios o ninguno.</p></div><span class="chip">${prizes.length} configurados</span></div>
+ <form id="prizesForm">
+ ${prizes.map((p,i)=>`<section class="prize-edit" data-award-id="${esc(p.id)}"><div class="row prize-edit-header"><h3>Premio ${i+1}</h3><div class="prize-controls"><button type="button" class="secondary" data-action="moveAwardUp" data-index="${i}" aria-label="Subir premio ${i+1}" title="Subir premio" ${i===0?'disabled':''}>↑</button><button type="button" class="secondary" data-action="moveAwardDown" data-index="${i}" aria-label="Bajar premio ${i+1}" title="Bajar premio" ${i===prizes.length-1?'disabled':''}>↓</button><button type="button" class="danger" data-action="removeAward" data-index="${i}" ${locked?'disabled':''}>Eliminar</button></div></div>
+ <div class="field"><label>Nombre del premio o categoría</label><input data-award-field="title" maxlength="90" minlength="2" required value="${esc(p.title)}" placeholder="Ej. 🥇 Primer puesto / Premio especial"></div>
+ <div class="fields2"><div class="field"><label>Dinero ($)</label><input data-award-field="cash" type="number" min="0" max="1000000" step="1" required value="${esc(p.cash)}"></div><div class="field"><label>Materiales con reciclaje gratis</label><input data-award-field="materials" type="number" min="0" max="100000" step="1" required value="${esc(p.materials)}"></div></div>
+ <div class="field"><label>Otro premio o beneficio (texto libre)</label><input data-award-field="extra" maxlength="180" value="${esc(p.extra||'')}" placeholder="Ej. 30 % de descuento, una caja sorpresa, un vehículo..."></div>
+ <div class="field"><label>Condiciones y descripción</label><textarea data-award-field="note" maxlength="400" placeholder="Ej. Vale por equipo, válido durante 30 días">${esc(p.note||'')}</textarea></div>
+ </section>`).join('')}
+ ${prizes.length?'':'<div class="empty">No hay premios configurados. Puedes añadir uno cuando quieras.</div>'}
+ <div class="prize-editor-footer"><button type="button" class="secondary" data-action="addAward" ${prizes.length>=20||locked?'disabled':''}>+ Añadir premio</button><button type="submit" class="primary" data-busy ${locked?'disabled':''}>Guardar premios (${prizes.length})</button></div></form>
+ <p class="hint">Los cambios, altas, bajas y el orden no se publican hasta pulsar «Guardar premios». Los títulos y beneficios se muestran exactamente como los configures. Los premios publicados se conservan al preparar otra edición.</p></div>`;
+}
 function adminHistory(){return `<div class="panel"><div class="row"><div><h2>Historial de ediciones</h2><p>Clasificaciones archivadas. El historial no incluye enlaces de fotografías.</p></div>${A.archives.length?'<button class="danger" data-action="deleteAllArchives">Borrar todo el historial</button>':''}</div><div class="notice warn"><strong>Atención</strong>El borrado de un evento archivado es definitivo. No altera la edición en curso ni libera los State IDs de la edición actual.</div>${A.archives.length?A.archives.map(a=>`<div class="archive-item"><div class="row"><strong>${esc(a.eventName||'Evento TRASA')} · Edición ${Number(a.editionNumber||1)}</strong><span class="muted">${fmt(a.finishedAt)}</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Equipo</th><th>Puntos</th><th>Fotos</th><th>Hora de finalización</th></tr></thead><tbody>${(a.results||[]).map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.teamName)}</td><td>${Number(r.points||0)}</td><td>${Number(r.approvedCount||0)}</td><td>${fmt(r.completedAt)}</td></tr>`).join('')}</tbody></table></div><div class="actions"><button class="secondary" data-action="exportArchive" data-id="${esc(a.id)}">Exportar clasificación CSV</button><button class="danger" data-action="deleteArchive" data-id="${esc(a.id)}">Eliminar del historial</button></div></div>`).join(''):blank('Aún no hay ediciones archivadas.')}</div>`;}
 function adminTeams(){if(!A.allTeams.length)return `<div class="panel">${blank('No hay equipos inscritos.')}</div>`;
 return `<div class="panel"><h2>Equipos y participantes</h2>${A.allTeams.map(t=>`<div class="teamitem"><div><strong>${esc(t.name)}</strong><div class="muted">${t.members.length} jugadores · ${esc(t.phone)}</div></div><div class="actions"><button class="secondary" data-action="adminTeam" data-id="${esc(t.id)}">Ver / editar</button><button class="plain" data-action="adminOpenReviews" data-id="${esc(t.id)}">Fotografías</button><button class="danger" data-action="deleteTeam" data-id="${esc(t.id)}" title="Borrar equipo e inscripciones">Eliminar equipo</button></div></div>`).join('')}</div>${A.adminSelected?adminTeamEditor():''}`;}
@@ -203,7 +251,7 @@ async function loginAdmin(form){let email=form.elements.email.value.trim(),passw
  if(!email||!password)throw Error('Introduce correo y contraseña de administración.');
  await signInWithEmailAndPassword(A.auth,email,password);A.adminTab='general';await loadAdmin();notify('Sesión de administración iniciada.');}
 async function logoutAdmin(){await signOut(A.auth);A.adminMode=false;A.allTeams=[];A.allSubs=[];A.challenges=[];A.adminSelected='';A.challengeEditor=null;A.archives=[];await signInAnonymously(A.auth);navigate('home');}
-async function setupEvent(){if(!A.adminMode||A.control)throw Error('Solo puedes crear la jornada inicial si no existe otra.');await setDoc(doc(A.db,'control','main'),{status:'registration',editionNumber:1,registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,prizes:DEFAULT_PRIZES,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
+async function setupEvent(){if(!A.adminMode||A.control)throw Error('Solo puedes crear la jornada inicial si no existe otra.');await setDoc(doc(A.db,'control','main'),{status:'registration',editionNumber:1,registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,awards:DEFAULT_AWARDS,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
 async function updateControl(values){await updateDoc(doc(A.db,'control','main'),values);notify('Estado del concurso actualizado.');}
 async function saveEventDetails(form){
  if(!A.adminMode||!A.control)throw Error('Debes iniciar sesión y crear la jornada.');
@@ -216,15 +264,27 @@ async function saveEventDetails(form){
 }
 async function savePrizes(form){
  if(!A.adminMode||!A.control||A.control.status==='resetting')throw Error('No se pueden modificar los premios durante el cambio de edición.');
- const prizes={};
- for(const k of PRIZE_KEYS){
-  const cash=Number(form.elements[`${k}Cash`].value);
-  const materials=Number(form.elements[`${k}Materials`].value);
-  const note=form.elements[`${k}Note`].value.trim();
-  if(!Number.isSafeInteger(cash)||cash<0||cash>1000000||!Number.isSafeInteger(materials)||materials<0||materials>100000||note.length>250)throw Error(`Comprueba los premios del apartado ${PRIZE_LABELS[k]}.`);
-  prizes[k]={cash,materials,note};
- }
- await updateDoc(doc(A.db,'control','main'),{prizes});notify('Premios actualizados en la portada.');
+ const raw=prizeDraftFromForm();
+ if(raw.length>20)throw Error('Puedes configurar como máximo 20 premios.');
+ const seen=new Set();
+ const awards=raw.map((p,i)=>{
+  const id=String(p.id||'');
+  const title=String(p.title||'').trim();
+  const extra=String(p.extra||'').trim();
+  const note=String(p.note||'').trim();
+  const cash=Number(p.cash),materials=Number(p.materials);
+  if(!/^[a-zA-Z0-9_-]{1,40}$/.test(id)||seen.has(id))throw Error(`Identificador inválido en el premio ${i+1}.`);
+  seen.add(id);
+  if(title.length<2||title.length>90||extra.length>180||note.length>400||
+     !Number.isSafeInteger(cash)||cash<0||cash>1000000||
+     !Number.isSafeInteger(materials)||materials<0||materials>100000){
+    throw Error(`Comprueba los datos del premio ${i+1}.`);
+  }
+  return {id,title,cash,materials,extra,note};
+ });
+ await updateDoc(doc(A.db,'control','main'),{awards});
+ A.awardDraft=null;
+ notify(`Guardados ${awards.length} premios. La portada se actualizará automáticamente.`);
 }
 function sortedScores(scores){return [...scores].sort((a,b)=>(b.points||0)-(a.points||0)||(b.approvedCount||0)-(a.approvedCount||0)||((a.completedAt?unix(a.completedAt):Infinity)-(b.completedAt?unix(b.completedAt):Infinity))||String(a.teamName||'').localeCompare(String(b.teamName||'')));}
 // Nunca publicar IDs privados de equipos como IDs de documentos de ranking.
@@ -307,7 +367,7 @@ async function prepareNextEdition(){
    tx.set(doc(A.db,'archives',archiveId),{
     eventName:eventName(),eventDescription:eventDescription(),editionNumber:Number(fresh.data().editionNumber||1),
     startedAt:fresh.data().startedAt||null,finishedAt:fresh.data().finishedAt||null,
-    prizes:prizeSettings(),results,archivedAt:serverTimestamp()
+    awards:prizeSettings(),results,archivedAt:serverTimestamp()
    });
    tx.update(controlRef,{status:'resetting',registrationOpen:false,archiveId});
   });
@@ -432,7 +492,7 @@ root.addEventListener('click',async e=>{
   if(action==='submitPhoto'){A.subSelected=btn.dataset.id;refresh();return;}
   if(action==='cancelPhoto'){A.subSelected='';refresh();return;}
   if(action==='adminLogout'){await logoutAdmin();return;}
-  if(action==='adminTab'){A.adminTab=btn.dataset.tab;A.adminSelected='';A.challengeEditor=null;if(['revisiones','historico'].includes(A.adminTab))await loadAdmin();else refresh();return;}
+  if(action==='adminTab'){A.awardDraft=null;A.adminTab=btn.dataset.tab;A.adminSelected='';A.challengeEditor=null;if(['revisiones','historico'].includes(A.adminTab))await loadAdmin();else refresh();return;}
   if(action==='setupEvent'){await setupEvent();return;}
   if(action==='toggleRegistrations'){if(A.control?.status!=='registration')throw Error('Solo puedes cambiar inscripciones durante la fase de registro.');await updateControl({registrationOpen:!A.control.registrationOpen});return;}
   if(action==='startEvent'){if(A.control?.status!=='registration')throw Error('Primero prepara la nueva edición.');if(!confirm('¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la competición.'))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
@@ -443,6 +503,23 @@ root.addEventListener('click',async e=>{
   if(action==='deleteArchive'){loading(true);await deleteArchive(btn.dataset.id);return;}
   if(action==='deleteAllArchives'){loading(true);await deleteAllArchives();return;}
   if(action==='exportDeliveries'){exportDeliveries();return;}
+  if(['addAward','removeAward','moveAwardUp','moveAwardDown'].includes(action)){
+    if(!A.adminMode||!A.control||A.control.status==='resetting')throw Error('La edición no permite modificar premios.');
+    A.awardDraft=prizeDraftFromForm();
+    const i=Number(btn.dataset.index);
+    if(action==='addAward'){
+      if(A.awardDraft.length>=20)throw Error('Máximo 20 premios.');
+      A.awardDraft.push({id:newPrizeId(),title:`Premio ${A.awardDraft.length+1}`,cash:0,materials:0,extra:'',note:''});
+    }else if(action==='removeAward'){
+      if(!Number.isInteger(i)||i<0||i>=A.awardDraft.length)throw Error('No existe el premio.');
+      A.awardDraft.splice(i,1);
+    }else{
+      const j=i+(action==='moveAwardUp'?-1:1);
+      if(!Number.isInteger(i)||j<0||j>=A.awardDraft.length)throw Error('No se puede cambiar ese orden.');
+      [A.awardDraft[i],A.awardDraft[j]]=[A.awardDraft[j],A.awardDraft[i]];
+    }
+    refresh();return;
+  }
   if(action==='deleteTeam'){
     const t=A.allTeams.find(x=>x.id===btn.dataset.id);
     if(!t)throw Error('No se encuentra el equipo.');
