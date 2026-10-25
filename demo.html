@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#202a22"><title>TRASA · Demostración del Bingo</title><link rel="icon" href="assets/emblema.webp" type="image/webp"><link rel="stylesheet" href="styles.css?v=1.5"></head>
+<body>
+<aside class="sidebar">
+ <a class="brand" href="index.html"><img src="assets/emblema.webp" alt="TRASA"><span><b>TRASA</b><small>RECICLAJE · EVENTOS</small></span></a>
+ <div class="navtitle">DEMOSTRACIÓN</div>
+ <nav aria-label="Navegación de prueba">
+ <button class="nav-item active" data-demo-nav="home"><span class="nav-icon">⌂</span><span class="nav-label">Inicio</span></button>
+ <button class="nav-item" data-demo-nav="team"><span class="nav-icon">♙</span><span class="nav-label">Mi equipo</span></button>
+ <button class="nav-item" data-demo-nav="tasks"><span class="nav-icon">▦</span><span class="nav-label">Pruebas</span></button>
+ <button class="nav-item" data-demo-nav="ranking"><span class="nav-icon">♜</span><span class="nav-label">Clasificación</span></button>
+ </nav>
+ <div class="navtitle">ORGANIZACIÓN</div>
+ <nav><button class="nav-item" data-demo-nav="admin"><span class="nav-icon">⚙</span><span class="nav-label">Administración de prueba</span></button></nav>
+ <p class="sidebar-note">Modo ficticio sin conexión a Firebase</p>
+</aside>
+<div class="shell"><header class="topbar"><div><div class="eyebrow">PRESENTACIÓN PARA ADMINISTRACIÓN · DATOS FICTICIOS</div><h1 id="demoPageTitle">Vista de demostración</h1></div><div class="topright"><span class="pill warn">SIMULACIÓN</span><span id="demoStatus" class="pill">SIN INICIAR</span></div></header>
+ <main><div class="notice warn"><strong>Modo demostración — no afecta al evento real</strong>Todos los equipos, fotografías, puntuaciones y decisiones de esta página son ejemplos. Ningún dato se envía a Firebase ni se guarda.</div><div id="demoRoot"></div></main>
+ <footer>TRASA · Simulación local del concurso · <a href="index.html">Volver a la web real</a></footer></div>
+ <div class="toast" id="demoToast" role="status"></div><script src="demo.js" defer></script>
+</body></html>

@@ -11,6 +11,17 @@ const adminTabs = ['general','premios','equipos','revisiones','retos','historico
 const teamKey = 'trasa_ojo_verde_equipo';
 const DEFAULT_EVENT_NAME = 'Operación Ojo Verde';
 const DEFAULT_EVENT_DESCRIPTION = 'Explora San Andreas, identifica residuos y lugares de recuperación y demuestra tu trabajo con fotografías. Cuantas más pruebas válidas, más puntos.';
+const DEFAULT_PARTICIPATION = 'Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo y, cuando comience el concurso, pega las URLs de las fotografías en sus pruebas correspondientes.';
+const DEFAULT_DURATION_MINUTES = 120;
+function participationInstructions(){return A.control?.participationInstructions ?? DEFAULT_PARTICIPATION;}
+function eventDuration(){const n=Number(A.control?.durationMinutes ?? DEFAULT_DURATION_MINUTES);return Number.isInteger(n)&&n>=5&&n<=480?n:DEFAULT_DURATION_MINUTES;}
+function remainingMs(){const start=A.control?.startedAt?.toMillis?.();if(!start)return null;return Math.max(0, start+eventDuration()*60*1000-Date.now());}
+function isAccepting(){return isLive() && (remainingMs() === null || remainingMs()>0);}
+function countDownText(){const left=remainingMs();if(left===null)return 'Sin iniciar';if(left<=0)return 'TIEMPO AGOTADO';const sec=Math.ceil(left/1000),hours=Math.floor(sec/3600),minutes=Math.floor((sec%3600)/60),seconds=sec%60;return [hours,minutes,seconds].map(x=>String(x).padStart(2,'0')).join(':');}
+function clockCard(){return isLive()?`<div class="countdown-card"><div><small>TIEMPO RESTANTE</small><strong data-countdown>${esc(countDownText())}</strong></div><p>Duración: ${eventDuration()} minutos · Las entregas se cierran al terminar la cuenta atrás.</p></div>`:'';}
+let lastClockExpired=false;
+function tickClock(){if(badge&&A.control)badge.textContent=stateTxt();if(isLive())document.querySelectorAll('[data-countdown]').forEach(el=>el.textContent=countDownText());const header=document.querySelector('#timeBadge');if(header){header.hidden=!isLive();if(isLive())header.textContent=countDownText();}if(isLive()&&remainingMs()===0&&!lastClockExpired){lastClockExpired=true;if(A.view==='tasks')refresh();}if(remainingMs()>0)lastClockExpired=false;}
+setInterval(tickClock,1000);
 function eventName(){ return A.control?.eventName || DEFAULT_EVENT_NAME; }
 function eventDescription(){ return A.control?.eventDescription || DEFAULT_EVENT_DESCRIPTION; }
 // Premios configurables. Compatibilidad: las ediciones V1.3 utilizaban «prizes» con 4 puestos fijos.
@@ -67,7 +78,7 @@ function notify(msg){const x=document.querySelector('#toast');x.textContent=msg;
 function problem(e){const msg=String(e?.message||e||'Error desconocido');console.error(e);notify((e?.code==='permission-denied'||msg.includes('permission-denied'))?'Acceso denegado: revisa los permisos, el registro de State IDs y el estado del evento.':msg);}
 function loading(v){A.busy=v;document.querySelectorAll('[data-busy]').forEach(x=>x.disabled=v);}
 function canUse(){return !!A.db && !!A.user;}
-function stateTxt(){let s=A.control?.status;return s==='live'?'EVENTO EN CURSO':s==='finished'?'EVENTO CERRADO':s==='registration'?'INSCRIPCIONES':s==='resetting'?'PREPARANDO EDICIÓN':'SIN PREPARAR';}
+function stateTxt(){let s=A.control?.status;return s==='live'?(remainingMs()===0?'TIEMPO AGOTADO':'EVENTO EN CURSO'):s==='finished'?'EVENTO CERRADO':s==='registration'?'INSCRIPCIONES':s==='resetting'?'PREPARANDO EDICIÓN':'SIN PREPARAR';}
 function isLive(){return A.control?.status==='live';}
 function visibleChallenges(){return isLive()||A.control?.status==='finished'||A.adminMode;}
 function getTeamId(){return A.teamId&&/^[A-Za-z0-9_-]{32,64}$/.test(A.teamId)?A.teamId:'';}
@@ -95,7 +106,7 @@ async function start(){
 }
 let unsubscribeControl=()=>{}, unsubscribeTeam=()=>{}, unsubscribeSubmissions=()=>{}, unsubscribeScores=()=>{};
 function subscribeControl(){unsubscribeControl();unsubscribeScores();
-  unsubscribeControl=onSnapshot(doc(A.db,'control','main'),s=>{A.control=s.exists()?s.data():null;refresh();if(visibleChallenges()&&A.view==='tasks')loadChallenges();},problem);
+  unsubscribeControl=onSnapshot(doc(A.db,'control','main'),s=>{A.control=s.exists()?s.data():null;refresh();tickClock();if(visibleChallenges()&&A.view==='tasks')loadChallenges();},problem);
   // El ranking público no contiene IDs privados de equipo ni datos personales.
   unsubscribeScores=onSnapshot(doc(A.db,'leaderboard','current'),s=>{
     A.scores=s.exists()&&Array.isArray(s.data().results)?s.data().results:[];
@@ -128,11 +139,11 @@ function refresh(){if(!A.db)return;
   badge.textContent=stateTxt();badge.className='pill '+(isLive()?'ok':A.control?.status==='registration'?'warn':'');
   const pages={home:'Resumen del evento',team:'Mi equipo',tasks:'Pruebas fotográficas',ranking:'Clasificación',admin:'Administración'};
   title.textContent=A.view==='home'?eventName():pages[A.view];document.title=`TRASA · ${eventName()}`;document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.nav===A.view));
-  root.innerHTML=({home,team,tasks,ranking,admin}[A.view]||home)(); bindForms();
+  root.innerHTML=({home,team,tasks,ranking,admin}[A.view]||home)();bindForms();tickClock();
 }
 function home(){return `<section class="hero"><div><div class="eyebrow">TRASA PRESENTA</div><h2>${esc(eventName())}</h2><p class="event-description">${esc(eventDescription())}</p><div class="actions"><button class="button white" data-action="team">Acceder a mi equipo →</button><button class="button white" data-action="tasks">Consultar pruebas ↗</button></div></div><img class="hero-logo" src="assets/logotipo.webp" alt="TRASA · Tratamiento de Residuos Antón"></section>
-  <div class="sectionhead"><h2>Estado de la jornada</h2></div><div class="grid"><div class="stat"><small>EVENTO</small><strong>${esc(stateTxt())}</strong></div><div class="stat"><small>PRUEBAS</small><strong>${visibleChallenges()?A.challenges.length:'Ocultas'}</strong></div><div class="stat"><small>INSCRIPCIONES</small><strong>${A.control?.registrationOpen?'Abiertas':'Cerradas'}</strong></div></div>
-  <div class="panel"><h3>¿Cómo participar?</h3><p>Forma un equipo de 2 a 4 personas. Registra sus nombres, State IDs y un teléfono de contacto RP. Guarda el enlace privado del equipo, y cuando comience el concurso pega las URLs de las fotografías en sus pruebas correspondientes.</p>${!isLive()&&A.control?.status!=='finished'?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>
+  <div class="sectionhead"><h2>Estado de la jornada</h2></div><div class="grid"><div class="stat"><small>EVENTO</small><strong>${esc(stateTxt())}</strong></div><div class="stat"><small>PRUEBAS</small><strong>${visibleChallenges()?A.challenges.length:'Ocultas'}</strong></div><div class="stat"><small>INSCRIPCIONES</small><strong>${A.control?.registrationOpen?'Abiertas':'Cerradas'}</strong></div><div class="stat clock-stat"><small>TIEMPO RESTANTE</small><strong data-countdown>${isLive()?esc(countDownText()):A.control?.status==='finished'?'Finalizado':'Sin iniciar'}</strong></div></div>
+  <div class="panel"><h3>¿Cómo participar?</h3><p class="participation-text">${esc(participationInstructions())}</p>${!isLive()&&A.control?.status!=='finished'?'<div class="notice warn"><strong>Pruebas ocultas</strong>Los objetivos no se mostrarán hasta que la organización inicie el evento.</div>':''}</div>
   ${A.control?`<div class="panel"><h3>Premios de esta edición</h3>${prizeSettings().length?`<div class="reward-grid">${prizeSettings().map(p=>`<div class="reward-item"><strong>${esc(p.title)}</strong><span>${esc(prizeSummary(p))}</span>${p.note?`<small>${esc(p.note)}</small>`:''}</div>`).join('')}</div><p class="hint">Las recompensas y sus condiciones se aplican según lo publicado por la organización.</p>`:'<p class="hint">Todavía no se han anunciado premios para esta edición.</p>'}</div>`:''}`;}
 function team(){if(!A.team){return `<div class="panel"><h2>Crear equipo</h2><p>Solo necesitas los nombres y State IDs de 2 a 4 jugadores, más un teléfono dentro del juego.</p>${A.control?.registrationOpen&&A.control?.status==='registration'?registerForm():'<div class="notice warn">Las inscripciones están cerradas. Espera a que la organización las abra.</div>'}</div><div class="panel"><h3>Ya tengo un enlace privado</h3><form id="accessTeam"><label>Código privado del equipo</label><div class="fields2"><input name="code" maxlength="64" placeholder="Código de 48 caracteres" required><button class="primary" type="submit">Entrar</button></div></form><p class="hint">También puedes abrir el enlace que te envió el capitán.</p></div>`;}
   return `<div class="panel"><div class="row"><div><div class="eyebrow">TU EXPEDIENTE</div><h2>${esc(A.team.name)}</h2></div><span class="chip approved">${A.team.members.length} participantes</span></div><p>Teléfono de contacto: <b>${esc(A.team.phone)}</b></p><div class="hr"></div><h3>Participantes inscritos</h3>${A.team.members.map((m,i)=>`<div class="teamitem"><span>${i+1}. <strong>${esc(m.name)}</strong></span><span class="muted">State ID: ${esc(m.stateId)}</span></div>`).join('')}<div class="hr"></div><h3>Enlace privado</h3><div class="code">${esc(urlForTeam(A.teamId))}</div><div class="actions"><button class="secondary" data-action="copyTeam">Copiar enlace</button><button class="plain" data-action="forgetTeam">Salir de este equipo en este navegador</button></div><p class="secret-note">Cualquiera con el enlace podrá consultar y presentar pruebas para el equipo. No lo publiques en canales abiertos.</p></div>`;}
@@ -142,9 +153,9 @@ function tasks(){if(!A.team)return `<div class="notice warn"><strong>Primero acc
   if(!visibleChallenges())return `<div class="locked"><span class="symbol">🔒</span><h2>Las pruebas permanecen ocultas</h2><p>Los objetivos, descripciones y puntos se mostrarán cuando TRASA inicie oficialmente el concurso.</p><span class="chip pending">${esc(stateTxt())}</span></div>`;
   if(!A.challenges.length)return `<div class="panel">${blank('Cargando las pruebas… Si no aparecen, la organización todavía no las ha preparado.')}</div>`;
   const total=A.challenges.length,approved=A.submissions.filter(s=>s.status==='approved').length;
-  return `<div class="grid"><div class="stat"><small>PRUEBAS APROBADAS</small><strong>${approved}/${total}</strong></div><div class="stat"><small>ENTREGAS REGISTRADAS</small><strong>${A.submissions.length}</strong></div><div class="stat"><small>ESTADO</small><strong>${isLive()?'En curso':'Cerrado'}</strong></div></div>
+  return `${clockCard()}<div class="grid"><div class="stat"><small>PRUEBAS APROBADAS</small><strong>${approved}/${total}</strong></div><div class="stat"><small>ENTREGAS REGISTRADAS</small><strong>${A.submissions.length}</strong></div><div class="stat"><small>ESTADO</small><strong>${isLive()?'En curso':'Cerrado'}</strong></div></div>
     <div class="sectionhead"><h2>Objetivos de inspección</h2><span class="muted">Una URL por objetivo · Máximo 3 intentos</span></div><div class="taskgrid">${A.challenges.map(t=>taskCard(t)).join('')}</div>`;}
-function taskCard(t){let s=A.submissions.find(x=>x.id===t.id), canSubmit=isLive()&&(!s||s.status==='rejected'&&s.attempt<3);
+function taskCard(t){let s=A.submissions.find(x=>x.id===t.id), canSubmit=isAccepting()&&(!s||s.status==='rejected'&&s.attempt<3);
   return `<article class="task"><div class="row"><span class="mark">${esc(t.category||'Inspección')}</span><span class="chip">${Number(t.points||0)} puntos</span></div><h3>${esc(t.title)}</h3><p>${esc(t.description||'')}</p><div class="row">${s?statusBadge(s.status):'<span class="chip">Sin entregar</span>'}<span class="muted">${s?`Intento ${s.attempt}/3`:''}</span></div>${s?.url?`<a class="button secondary" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Abrir fotografía ↗</a>`:''}${s?.status==='rejected'&&s?.reason?`<small class="dangerText">Motivo: ${esc(s.reason)}</small>`:''}${canSubmit?(A.subSelected===t.id?`<form id="photoForm" data-id="${esc(t.id)}"><label>URL HTTPS de la fotografía</label><input name="url" type="url" placeholder="https://..." required autocomplete="off"><div class="actions"><button class="primary" type="submit">Confirmar entrega</button><button class="secondary" type="button" data-action="cancelPhoto">Cancelar</button></div></form>`:`<button class="primary" data-action="submitPhoto" data-id="${esc(t.id)}">${s?'Corregir fotografía':'Pegar URL de fotografía'}</button>`):''}</article>`;}
 function ranking(){if(!A.scores.length)return `<div class="panel"><h2>Clasificación</h2><p>El ranking se construye con fotografías aprobadas desde Administración.</p>${blank('Todavía no hay resultados registrados.')}</div>`;
  let arr=[...A.scores].sort((a,b)=>(b.points||0)-(a.points||0)||(b.approvedCount||0)-(a.approvedCount||0)||((a.completedAt?unix(a.completedAt):Infinity)-(b.completedAt?unix(b.completedAt):Infinity))||a.teamName.localeCompare(b.teamName));
@@ -153,7 +164,7 @@ function admin(){if(!A.adminMode)return `<div class="panel" style="max-width:520
  return `<div class="row" style="margin:0 0 16px"><span class="chip approved">Administrador conectado</span><button class="plain" data-action="adminLogout">Cerrar sesión</button></div><div class="admin-tabs">${adminTabs.map((v,i)=>`<button class="${A.adminTab===v?'primary':'secondary'}" data-action="adminTab" data-tab="${v}">${['Resumen','Premios','Equipos','Revisar fotos','Pruebas','Historial'][i]}</button>`).join('')}</div>${({general:adminGeneral,premios:adminPrizes,equipos:adminTeams,revisiones:adminReviews,retos:adminChallenges,historico:adminHistory}[A.adminTab]||adminGeneral)()}`;}
 function adminGeneral(){
  const status=A.control?.status;
- return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>EDICIÓN</small><strong>${Number(A.control?.editionNumber||1)}</strong></div></div>
+ return `<div class="grid"><div class="stat"><small>EQUIPOS REGISTRADOS</small><strong>${A.allTeams.length}</strong></div><div class="stat"><small>PRUEBAS PREPARADAS</small><strong>${A.challenges.length}</strong></div><div class="stat"><small>EDICIÓN</small><strong>${Number(A.control?.editionNumber||1)}</strong></div><div class="stat clock-stat"><small>TIEMPO RESTANTE</small><strong data-countdown>${isLive()?esc(countDownText()):A.control?.status==='finished'?'Finalizado':'Sin iniciar'}</strong></div></div>
  <div class="panel"><h2>Control de la jornada</h2><p>Las pruebas están ocultas antes del inicio. Puedes reutilizar o editar las pruebas para la siguiente edición.</p>
  ${!A.control?`<button class="primary" data-action="setupEvent">Crear jornada inicial</button>`:
  `<div class="actions">
@@ -165,9 +176,9 @@ function adminGeneral(){
  </div>`}
  ${status==='finished'?'<div class="notice warn"><strong>Antes de crear otra edición</strong>Termina de revisar las fotografías. Se archivará la clasificación; después se eliminarán los equipos, sus URLs y sus inscripciones actuales. Se liberarán los State IDs. Las pruebas y los premios configurados se conservarán. Si quieres conservar los enlaces de las fotos, expórtalos primero.</div><button class="secondary" data-action="exportDeliveries">Exportar entregas y enlaces CSV</button>':''}
  ${status==='resetting'?'<div class="notice warn"><strong>Preparación interrumpida o en curso</strong>Las inscripciones siguen bloqueadas. Usa «Reanudar preparación» para completar la limpieza sin perder el archivo de resultados.</div>':''}
- <div class="actions"><button class="secondary" data-action="publishLeaderboard" ${!A.control?'disabled':''}>Actualizar clasificación pública</button></div><p class="hint">Pulsa una vez tras actualizar desde una versión anterior, o si la clasificación no muestra resultados. No publica los códigos de equipo.</p>
+ <div class="actions"><button class="secondary" data-action="publishLeaderboard" ${!A.control?'disabled':''}>Actualizar clasificación pública</button><a class="button secondary" href="demo.html" target="_blank" rel="noopener noreferrer">Abrir demostración sin tocar el evento ↗</a><button class="danger" data-action="resetEditionNumber" ${status!=='registration'||A.allTeams.length?'disabled':''}>Reiniciar numeración de ediciones</button></div><p class="hint">Reiniciar numeración establece la edición actual en 1, sin borrar el historial. Solo se permite durante inscripciones y sin equipos. Para eliminar clasificaciones archivadas utiliza la pestaña Historial.</p>
  </div>
- <div class="panel"><h2>Nombre y descripción del evento</h2><p>Cambia los textos de la portada para la edición actual o la próxima.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required>${esc(eventDescription())}</textarea></div><button type="submit" class="primary" data-busy ${!A.control||status==='resetting'?'disabled':''}>Guardar información del evento</button></form></div>`;
+ <div class="panel"><h2>Configuración del evento</h2><p>Modifica la portada, el texto de participación y la duración de cada nueva jornada.</p><form id="eventDetails"><div class="field"><label>Nombre del evento</label><input name="eventName" minlength="3" maxlength="75" required value="${esc(eventName())}"></div><div class="field"><label>Descripción de la portada</label><textarea name="eventDescription" minlength="10" maxlength="600" required>${esc(eventDescription())}</textarea></div><div class="field"><label>¿Cómo participar?</label><textarea name="participationInstructions" minlength="10" maxlength="1600" required class="participation-editor">${esc(participationInstructions())}</textarea></div><div class="field"><label>Duración del evento (minutos)</label><input name="durationMinutes" type="number" min="5" max="480" step="1" required value="${eventDuration()}" ${status==='live'?'readonly':''}><p class="hint">Entre 5 y 480 minutos. No se puede modificar una vez iniciado el evento.</p></div><button type="submit" class="primary" data-busy ${!A.control||status==='resetting'?'disabled':''}>Guardar configuración</button></form></div>`;
 }
 // Lee el editor visible para conservar los cambios aún no guardados al añadir, eliminar o mover una tarjeta.
 function prizeDraftFromForm(){
@@ -241,7 +252,7 @@ async function registerTeam(form){const name=form.elements.teamName.value.trim()
  batch.set(doc(A.db,'captains',ownerUid),{teamId,createdAt:serverTimestamp()});
  batch.set(doc(A.db,'teamNames',nameKey),{teamId,createdAt:serverTimestamp()});
  await batch.commit();A.membersCount=2;await openTeam(teamId,true);notify('Equipo inscrito. Guarda el enlace privado.');navigate('team');}
-async function savePhoto(id,link){if(!A.team||!isLive())throw Error('Evento cerrado o equipo no seleccionado.');
+async function savePhoto(id,link){if(!A.team||!isAccepting())throw Error('El plazo ha terminado o no has seleccionado un equipo.');
  const url=cleanURL(link);const s=A.submissions.find(s=>s.id===id);const ref=doc(A.db,'teams',A.teamId,'submissions',id);
  if(!s){await setDoc(ref,{url,status:'pending',attempt:1,submittedAt:serverTimestamp()});}
  else if(s.status==='rejected'&&s.attempt<3){await updateDoc(ref,{url,status:'pending',attempt:s.attempt+1,submittedAt:serverTimestamp()});}
@@ -251,7 +262,7 @@ async function loginAdmin(form){let email=form.elements.email.value.trim(),passw
  if(!email||!password)throw Error('Introduce correo y contraseña de administración.');
  await signInWithEmailAndPassword(A.auth,email,password);A.adminTab='general';await loadAdmin();notify('Sesión de administración iniciada.');}
 async function logoutAdmin(){await signOut(A.auth);A.adminMode=false;A.allTeams=[];A.allSubs=[];A.challenges=[];A.adminSelected='';A.challengeEditor=null;A.archives=[];await signInAnonymously(A.auth);navigate('home');}
-async function setupEvent(){if(!A.adminMode||A.control)throw Error('Solo puedes crear la jornada inicial si no existe otra.');await setDoc(doc(A.db,'control','main'),{status:'registration',editionNumber:1,registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,awards:DEFAULT_AWARDS,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
+async function setupEvent(){if(!A.adminMode||A.control)throw Error('Solo puedes crear la jornada inicial si no existe otra.');await setDoc(doc(A.db,'control','main'),{status:'registration',editionNumber:1,registrationOpen:true,startedAt:null,finishedAt:null,eventName:DEFAULT_EVENT_NAME,eventDescription:DEFAULT_EVENT_DESCRIPTION,participationInstructions:DEFAULT_PARTICIPATION,durationMinutes:DEFAULT_DURATION_MINUTES,awards:DEFAULT_AWARDS,createdAt:serverTimestamp()});notify('Jornada creada: inscripciones abiertas.');}
 async function updateControl(values){await updateDoc(doc(A.db,'control','main'),values);notify('Estado del concurso actualizado.');}
 async function saveEventDetails(form){
  if(!A.adminMode||!A.control)throw Error('Debes iniciar sesión y crear la jornada.');
@@ -259,7 +270,12 @@ async function saveEventDetails(form){
  const description=form.elements.eventDescription.value.trim();
  if(name.length<3||name.length>75)throw Error('El nombre debe tener entre 3 y 75 caracteres.');
  if(description.length<10||description.length>600)throw Error('La descripción debe tener entre 10 y 600 caracteres.');
- await updateDoc(doc(A.db,'control','main'),{eventName:name,eventDescription:description});
+ const participation=form.elements.participationInstructions.value.trim();
+ const duration=Number(form.elements.durationMinutes.value);
+ if(participation.length<10||participation.length>1600)throw Error('El texto de participación debe tener entre 10 y 1600 caracteres.');
+ if(!Number.isInteger(duration)||duration<5||duration>480)throw Error('Duración fuera del intervalo permitido (5–480 minutos).');
+ if(A.control.status==='live'&&duration!==eventDuration())throw Error('No se puede cambiar la duración de un evento iniciado.');
+ await updateDoc(doc(A.db,'control','main'),{eventName:name,eventDescription:description,participationInstructions:participation,...(A.control.status==='live'?{}:{durationMinutes:duration})});
   notify('Información del evento guardada y publicada.');
 }
 async function savePrizes(form){
@@ -330,6 +346,16 @@ async function deleteArchive(id){
  if(verification!=='ELIMINAR')throw Error('Operación cancelada: confirmación incorrecta.');
  await deleteDoc(doc(A.db,'archives',id));
  await loadArchives();notify('Edición eliminada del historial.');
+}
+async function resetEditionNumber(){
+ if(!A.adminMode||!A.control||A.control.status!=='registration')throw Error('Solo se puede reiniciar la numeración mientras están abiertas las inscripciones.');
+ const teams=await getDocs(collection(A.db,'teams'));
+ if(!teams.empty)throw Error('Hay equipos inscritos. Elimínalos o prepara una nueva edición antes de reiniciar la numeración.');
+ const answer=window.prompt('Se cambiará el número de la edición actual a 1, sin borrar el historial ni otras configuraciones. Escribe REINICIAR para confirmar:', '');
+ if(answer===null)return;
+ if(answer!=='REINICIAR')throw Error('Confirmación incorrecta.');
+ await updateDoc(doc(A.db,'control','main'),{editionNumber:1});
+ notify('La edición actual vuelve a ser la número 1.');
 }
 async function deleteAllArchives(){
  if(!A.adminMode)throw Error('Solo Administración puede eliminar el historial.');
@@ -494,8 +520,9 @@ root.addEventListener('click',async e=>{
   if(action==='adminLogout'){await logoutAdmin();return;}
   if(action==='adminTab'){A.awardDraft=null;A.adminTab=btn.dataset.tab;A.adminSelected='';A.challengeEditor=null;if(['revisiones','historico'].includes(A.adminTab))await loadAdmin();else refresh();return;}
   if(action==='setupEvent'){await setupEvent();return;}
+  if(action==='resetEditionNumber'){loading(true);await resetEditionNumber();return;}
   if(action==='toggleRegistrations'){if(A.control?.status!=='registration')throw Error('Solo puedes cambiar inscripciones durante la fase de registro.');await updateControl({registrationOpen:!A.control.registrationOpen});return;}
-  if(action==='startEvent'){if(A.control?.status!=='registration')throw Error('Primero prepara la nueva edición.');if(!confirm('¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la competición.'))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
+  if(action==='startEvent'){if(A.control?.status!=='registration')throw Error('Primero prepara la nueva edición.');if(!confirm(`¿Iniciar el concurso ahora? Las pruebas se harán visibles y comenzará la cuenta atrás de ${eventDuration()} minutos.`))return;await updateControl({status:'live',registrationOpen:false,startedAt:serverTimestamp()});return;}
   if(action==='finishEvent'){if(!isLive())throw Error('El concurso no está en curso.');if(!confirm('¿Finalizar la jornada? Ya no se podrán entregar fotografías.'))return;await updateControl({status:'finished',registrationOpen:false,finishedAt:serverTimestamp()});return;}
   if(action==='newEdition'||action==='resumeEdition'){if(!confirm('Se archivará la clasificación y se borrarán todos los equipos, fotografías registradas y reservas de State IDs de la edición cerrada. Se conservarán las pruebas y los premios configurados. ¿Continuar?'))return;loading(true);await prepareNextEdition();return;}
   if(action==='publishLeaderboard'){loading(true);await publishLeaderboard();notify('Clasificación pública actualizada sin códigos de equipo.');return;}

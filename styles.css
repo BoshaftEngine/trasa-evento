@@ -25,3 +25,15 @@
 .prize-editor-footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px}
 .prize-edit .field{margin-bottom:12px}
 @media(max-width:700px){.prize-editor-footer button{flex:1}.prize-controls button{font-size:11px}}
+
+/* TRASA V1.5: cuenta atrás pública y editor de instrucciones. */
+.countdown-card{background:linear-gradient(115deg,#1f2b21,#495936);color:#fff;border-radius:15px;padding:20px 24px;margin:18px 0;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.countdown-card small{display:block;color:#c1d0b5;letter-spacing:.11em;font-size:11px;font-weight:750}
+.countdown-card strong{display:block;font-size:clamp(26px,4vw,40px);letter-spacing:.025em;font-variant-numeric:tabular-nums;margin:4px 0 0}
+.countdown-card p{color:#d7e1d1;font-size:13px;max-width:330px;margin:0}
+.timer-pill{font-variant-numeric:tabular-nums;background:#dfe9d6;color:#35532f;letter-spacing:.06em}
+.participation-text{white-space:pre-line;overflow-wrap:anywhere}
+.participation-editor{min-height:135px}
+[hidden]{display:none!important}
+
+.clock-stat strong{font-variant-numeric:tabular-nums;letter-spacing:-.03em;overflow-wrap:anywhere}
