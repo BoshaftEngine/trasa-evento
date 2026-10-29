@@ -2,7 +2,7 @@
 
 .hero h2{overflow-wrap:anywhere}.hero .event-description{white-space:pre-line;overflow-wrap:anywhere}.teamitem>.actions{margin-top:0}.teamitem button.danger{background:#a2433f;color:#fff}
 
-/* Bingo V1.2: premios e histórico */
+/* TRASA Eventos: premios e histórico */
 .reward-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
 .reward-item{border:1px solid var(--line);border-radius:13px;background:#f8faf6;padding:16px;display:flex;flex-direction:column;gap:8px}
 .reward-item strong{font-size:14px;color:#37492a}.reward-item span{font-weight:800;font-size:17px;color:var(--green)}.reward-item small{color:var(--muted);line-height:1.5}
